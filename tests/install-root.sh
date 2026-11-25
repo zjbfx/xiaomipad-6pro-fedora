@@ -207,7 +207,7 @@ for options in '' 'KEEP-HOME' 'ENABLE-USB-RESCUE KEEP-HOME' 'KEEP-HOME ENABLE-US
 	expect_die "options '$options'" 'RAM boot identity changed'
 done
 for options in 'KEEP-HOME KEEP-HOME' 'ENABLE-USB-RESCUE KEEP-HOME ENABLE-USB-RESCUE' \
-	'KEEP-HOME UNKNOWN' 'KEEP-HOME SWITCH-STORE'; do
+	'KEEP-HOME UNKNOWN' 'KEEP-HOME KEEP-THE-HOME'; do
 	# shellcheck disable=SC2086
 	run_script $fixed $options
 	expect_die "options '$options'" 'usage: install-root.sh'

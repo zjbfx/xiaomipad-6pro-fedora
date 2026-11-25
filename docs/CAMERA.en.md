@@ -18,7 +18,7 @@ autofocus and no hardware encoding. The front camera is not enabled.
 
 ## Validation status
 
-Contributor testing on a liuqin tablet (Ubuntu 26.04, a temporary `fastboot boot`
+Contributor testing on a liuqin tablet (a temporary `fastboot boot`
 of the camera kernel) covered:
 
 - ten capture start/stop cycles, with the TITAN_TOP and IFE0 power domains

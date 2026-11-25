@@ -4,7 +4,7 @@
 
 ## Current status
 
-The native Ubuntu Settings enrollment interface is implemented for the FPC1264
+The native GNOME Settings enrollment interface is implemented for the FPC1264
 sensor. It uses the normal system authorization dialog and fprintd/libfprint
 progress, cancellation and storage. Normal use does not require a terminal or a
 separate fingerprint application.
@@ -32,7 +32,7 @@ availability after reboot requires the matching kernel and modules to be
 persistently installed. That ordinary boot path has passed on this test unit.
 Build and installation details are in the [component reference](../device/fingerprint/oem/README.md).
 
-## Enroll through Ubuntu Settings
+## Enroll through GNOME Settings
 
 1. Open **Settings → System → Users → Fingerprint Login** for the configured
    account. Unlock Settings if the normal system dialog requests it.
@@ -41,7 +41,7 @@ Build and installation details are in the [component reference](../device/finger
    dialog reports completion. Cancellation waits for the ongoing operation to
    clean up before releasing the reader.
 
-After successful enrollment, verification uses the regular Ubuntu login and
+After successful enrollment, verification uses the regular GNOME login and
 lock screen. The normal password-login stack is preserved, so password login
 remains the fallback. The presence of the Settings row or a running service does
 not demonstrate successful enrollment or unlock.
@@ -79,9 +79,8 @@ helper. Fingerprint login does not decrypt the password-encrypted GNOME login
 keyring; applications accessing its secrets may still request the keyring password.
 
 Multiple fingers and accounts are not supported yet. Placement sensitivity,
-latency, behaviour after suspend, long-term reliability and the coexistence of
-fingerprint secure storage with Android after switching systems are not
-characterised yet.
+latency, behaviour after suspend and long-term reliability are not characterised
+yet.
 
 ## Appendix: recovery and legacy diagnostics
 

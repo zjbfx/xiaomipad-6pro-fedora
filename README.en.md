@@ -1,26 +1,20 @@
-# Ubuntu for Xiaomi Pad 6 Pro
+# Fedora for Xiaomi Pad 6 Pro
 
-Run the Ubuntu 26.04 GNOME desktop natively on the Xiaomi Pad 6 Pro (codename `liuqin`, Snapdragon 8+ Gen 1), optionally alongside Android, with a kernel adapted from upstream Linux. [中文](README.md)
+Run the Fedora Workstation GNOME desktop natively on the Xiaomi Pad 6 Pro (codename `liuqin`, Snapdragon 8+ Gen 1). A single-system installation: Android is neither kept nor written. The kernel is adapted from upstream Linux. [中文](README.md)
 
-**The latest version is on [Releases](https://github.com/yzddmr6/xiaomipad-6pro-mainline/releases/latest). Official builds are published only in this repository's Releases, free of charge.** See [Hardware Support](#hardware-support) for the support status.
+This project was split out of the Fedora port branch of [yzddmr6/xiaomipad-6pro-mainline](https://github.com/yzddmr6/xiaomipad-6pro-mainline) and maintains the Fedora path only; Ubuntu and dual-boot installations are not provided. The kernel, device trees, boot image assembly and installer machinery come from upstream; the kernel source is [linux-sm8450-liuqin](https://github.com/yzddmr6/linux-sm8450-liuqin).
 
-## 📮 Follow & Discuss
-
-Progress updates, usage tips and AI discussions (primarily in Chinese) are published here first — issue feedback is welcome.
-
-| WeChat: 熵减矩阵 | Xiaohongshu: yzddmr6 |
-|:---:|:---:|
-| <img src="docs/assets/gzh-qr.png" width="200" alt="WeChat: 熵减矩阵"> | <img src="docs/assets/xhs-qr.jpg" width="200" alt="Xiaohongshu: yzddmr6"> |
-| Updates · Tips · AI talks | Sharing · Feedback |
+No prebuilt installation bundles are published. Build one on a Fedora host as described in the [Fedora guide](docs/FEDORA.zh-CN.md) (currently Chinese). The `installer.img` and public fingerprint inputs required by the build come from the upstream v0.8.0 release.
 
 ## ⚠️ Read Before Installing
 
 This project is only for the **Xiaomi Pad 6 Pro (liuqin, SM8475)**. Other Xiaomi Pad models are not compatible.
 
 - **This is an experimental project.** Installation unlocks, repartitions and erases the tablet; a mistake can leave it unable to start. Follow the installation guide and keep your backups.
+- **Linux only.** The installer deletes the Android `userdata` partition, gives the tail of the disk to `linux_root` and `linux_home`, writes `boot_b` only and boots from slot B. Android is not kept and there is no dual-boot switch.
 - **Data loss**: unlocking the bootloader and performing an initial installation erase user data. Back up your files first.
-- **Validated only on the 256 GB model.** The 128 GB and 512 GB models share the factory partition structure and are accepted by the installer, but they are not validated; modified partition layouts are not supported. The installer repartitions the tail of the disk; do not bypass its checks.
-- **Dual boot**: the dual-boot layout keeps stock Android. Both systems boot from slot A, and switching writes the other system's boot image into `boot_a`. Never use KernelSU's "install to inactive slot", never run the stock `flash_all` script again, and keep system updates frozen; see the slot rules in the [installation steps](docs/INSTALL-TESTING.en.md#switching-between-the-systems).
+- **Validated only on the 256 GB model.** The 128 GB and 512 GB models share the factory partition structure and are accepted by the installer, but they are not individually validated; modified partition layouts are not supported. The installer repartitions the tail of the disk; do not bypass its checks.
+- **Stock firmware baseline.** Upstream validation used HyperOS OS2.0.6.0; this tablet runs OS3. Check the anti-rollback version before restoring Android: flashing firmware older than the fuse set in the device will brick it.
 - **Recovery preparation**: obtain the matching stock firmware and read the [data and recovery instructions](docs/FLASHING.en.md#data-and-recovery) before installing.
 - **Hardware limitations**: some features are incomplete. Review the hardware support table below.
 
@@ -28,20 +22,18 @@ Factory calibration and device addresses must come from the same tablet; never c
 
 ## 🚀 Getting Started
 
-Download the complete installation bundle of one version from [GitHub Releases](https://github.com/yzddmr6/xiaomipad-6pro-mainline/releases/latest). Do not mix files from different versions.
-
 | I want to | Read |
 |---|---|
-| Install Ubuntu | [Installation guide](docs/FLASHING.en.md) |
+| Build a Fedora bundle | [Fedora guide](docs/FEDORA.zh-CN.md) |
+| Install Fedora | [Installation steps](docs/INSTALL-TESTING.en.md) |
 | Upgrade an installed system | [Upgrading an installed system](docs/INSTALL-TESTING.en.md#upgrading-an-installed-system) |
-| Build the kernel and device components | [Build guide](docs/BUILD.en.md) |
 | Restore Android | [Data and recovery instructions](docs/FLASHING.en.md#data-and-recovery) |
 
-Prebuilt installation bundles include matching boot and root filesystem images, installation tools and checksums.
+An installation bundle includes matching boot and root filesystem images, installation tools and checksums. Do not mix boot images and system components from different releases.
 
 ## Hardware Support
 
-Support in the latest release. ✅ Working · 🟡 Partial · ❌ Unsupported.
+Support with the v0.8.0 kernel and the Fedora device layer. ✅ Working · 🟡 Partial · ❌ Unsupported.
 Component identities come from confirmed board information and device trees.
 
 At a glance; see the tables for the scope of each feature:
@@ -55,7 +47,7 @@ At a glance; see the tables for the scope of each feature:
 
 | Feature | Component / Implementation | Status | Details |
 |---|---|---|---|
-| SoC / CPU | Qualcomm Snapdragon 8+ Gen 1 (SM8475), ARM64 | ✅ Working | Mainline kernel and Ubuntu desktop |
+| SoC / CPU | Qualcomm Snapdragon 8+ Gen 1 (SM8475), ARM64 | ✅ Working | Mainline kernel and Fedora desktop |
 | GPU / compositing | Adreno 730 / Freedreno / Turnip / Mesa | ✅ Working | Hardware-accelerated compositing and OpenGL ES and Vulkan for applications, using the distribution's Mesa |
 | Internal storage | UFS / ext4 | ✅ Working | Separate system and `/home` partitions |
 | Display | Novatek NT36532 / dual DSI / DSC | ✅ Working | 2880×1800 at 120 Hz |
@@ -106,35 +98,32 @@ Not yet supported: hibernation to disk, writing the hardware clock (the clock is
 
 ## Usage and Maintenance
 
-Checks GitHub anonymously once a day for the latest release and notifies you when a newer version is available; this can be disabled in notification settings.
-
-Ubuntu packages are managed through APT. The project kernel and device components are updated together with the installation bundle: upgrade with a reinstall that keeps `/home`, see [Upgrading an installed system](docs/INSTALL-TESTING.en.md#upgrading-an-installed-system). Do not mix boot images and system components from different releases.
+Fedora packages are managed through DNF. The project kernel and device components are updated together with the installation bundle: upgrade with a reinstall that keeps `/home`, see [Upgrading an installed system](docs/INSTALL-TESTING.en.md#upgrading-an-installed-system). Do not mix boot images and system components from different releases.
 
 **Developer mode.** `sudo liuqin-devmode on` enables root SSH login over the USB cable; it is off by default and accepts keys only. Installing with `--enable-rescue` provisions the host's public key. While it is on, the tablet does not suspend automatically. Connect from the host with `python3 tools/liuqin-devmode-ssh.py root`, and run `sudo liuqin-devmode off` when done.
-
-To run Android applications inside Ubuntu, Waydroid is supported; the required kernel configuration is built in. See [Waydroid support](docs/WAYDROID.en.md).
 
 Charging power is negotiated through the vendor charger authentication path. See [Fast charging](docs/FASTCHARGE.en.md).
 
 Report problems through GitHub Issues with the device model, system version, reproduction steps and relevant logs.
 Remove passwords, network credentials and personal information before sharing logs.
-The accounts listed above are also available for usage discussions.
 
 ## Development and Contributions
 
 | Repository | Contents |
 |---|---|
-| xiaomipad-6pro-mainline | Device configuration, userspace integration, build and installation tools, documentation |
+| xiaomipad-6pro-fedora | Fedora device layer, build and installation tools, documentation (this repository) |
+| [xiaomipad-6pro-mainline](https://github.com/yzddmr6/xiaomipad-6pro-mainline) | Upstream project: Ubuntu, device layer and installation tools |
 | [linux-sm8450-liuqin](https://github.com/yzddmr6/linux-sm8450-liuqin) | Complete Linux kernel source and device adaptation commits |
 
 [kernel/source.json](kernel/source.json) records the kernel revision used by the build.
-The device branch is `liuqin-6.17`. Contributions to drivers, tools and documentation are welcome;
+The device branch is `liuqin-6.17`. Contributions to the Fedora device layer, tools and documentation are welcome;
 see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Acknowledgments and Licensing
 
-This project builds on the kernel work of [sm8450-mainline](https://github.com/sm8450-mainline/linux),
-along with Ubuntu, GNOME, Freedreno and the Linux Qualcomm community.
+This project builds on [yzddmr6/xiaomipad-6pro-mainline](https://github.com/yzddmr6/xiaomipad-6pro-mainline),
+whose kernel work comes from [sm8450-mainline](https://github.com/sm8450-mainline/linux),
+along with Fedora, GNOME, Freedreno and the Linux Qualcomm community.
 
 Original project code is MIT-licensed unless a file states otherwise. Linux and third-party components retain their own licenses;
 firmware is subject to its respective owners' terms. See [LICENSE](LICENSE) and [NOTICE](NOTICE).

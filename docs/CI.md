@@ -3,11 +3,11 @@
 ## Kernel Changes
 
 The kernel repository's `Liuqin kernel` workflow builds pushes and pull requests
-to `liuqin-6.17`. It checks out the integration repository's `main` and uses its
-shared `.github/actions/kernel` action. No cross-repository write token is needed.
+to `liuqin-6.17`. It checks out this repository's `main` and uses its shared
+`.github/actions/kernel` action. No cross-repository write token is needed.
 Both repositories must exist under the same GitHub owner before enabling this flow.
 
-The integration repository's `Kernel build` workflow uses `kernel/source.json`.
+This repository's `Kernel build` workflow uses `kernel/source.json`.
 Accept a kernel update by changing that commit: the configuration and packaging
 remain in the integration repository. Kernel development artifacts record their
 tested SHA separately and cannot enter image assembly as product inputs. The one
@@ -30,7 +30,7 @@ successful stages. Do not modify sources or inputs while an assembly is running.
 The `System image` workflow is manually dispatched on `main` and uploads the
 matching boot image, installer RAM image, rootfs, installer and checksums.
 It requires a dedicated Linux x86-64 runner labeled `liuqin-images`, sufficient
-disk space for kernel outputs and two desktop trees, and the host dependencies
+disk space for kernel outputs and the Fedora root tree, and the host dependencies
 listed in BUILD. Python also needs pyelftools; image assembly needs root, GNU tar,
 ACL/xattr support, squashfs-tools, cpio, ARM64 binfmt and the cross compiler.
 The runner must allow noninteractive execution of the trusted assembly command
@@ -39,10 +39,10 @@ After configuring the runner, set repository variable `LIUQIN_IMAGE_CI=enabled`
 to also assemble images automatically when relevant code changes reach `main`.
 
 Set `LIUQIN_IMAGE_INPUTS` to a runner-local JSON file (default
-`/opt/liuqin/inputs.json`). It contains the prepared-input variables listed by
-`tools/build-liuqin-image.py`: Ubuntu root and manifest, firmware pool and prepared
-tree, audio topology, WLAN set, stock DTB/DTBO inputs, sensor archive, Settings
-binary and its build manifest, BusyBox and mkbootimg. Hash values remain pinned;
+`/opt/liuqin/inputs.json`). It contains the Fedora prepared-input variables listed by
+`tools/build-liuqin-image.py`: Fedora root and manifest, firmware pool and prepared
+tree, audio topology, WLAN set, stock DTB/DTBO inputs, sensor archive, fingerprint
+bundle, libfprint TOD archive, the upstream `installer.img`, and mkbootimg. Hash values remain pinned;
 the local paths and raw input file are not uploaded with artifacts. Upstream
 downloads and prebuilt components may be cached outside the checkout.
 
@@ -57,12 +57,13 @@ python3 tools/install-liuqin.py --bundle out/image/bundle --check
 
 The workflow does not create a public Release or mark a bundle device-tested.
 Full-image CI requires a configured dedicated runner. Test installation on the
-final candidate before marking a bundle device-tested; report Android recovery
-separately and do not claim it is validated by a successful Ubuntu installation.
+final candidate before marking a bundle device-tested; report stock-firmware
+recovery separately and do not claim it is validated by a successful Linux
+installation.
 
 ## Public Delivery
 
-Installation versions belong in tagged Releases of the integration repository,
+Installation versions belong in tagged Releases of this repository,
 not another repository, the source Git tree or Git LFS. Actions artifacts are
 temporary build results, not supported installation releases.
 
@@ -79,6 +80,6 @@ firmware repository. Small, stable, generic firmware binaries may also be tracke
 under `device/firmware/` with their provenance, hashes and applicable notices;
 this is an allowed layout, not a claim that all firmware is already imported.
 Keep one authoritative copy and avoid repeatedly committing large binary sets.
-Upstream Ubuntu images, unmodified upstream components and
+Upstream images, unmodified upstream components and
 full stock ROMs are not mirrored here. Per-device calibration and addresses are
 always obtained from the user's own tablet and are never Release assets.

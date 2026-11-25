@@ -24,10 +24,9 @@ INSTALLER_GLOB = 'tools/lib/install-*.sh'
 def installation_path_changes(project, env):
     """List the installation-path files that changed since the last release tag.
 
-    Approach 4 of the dual-boot plan: a layout change must go through a full
-    attended installation, never an incremental one.  The rule is a build-time
-    assertion rather than a note in a document, because a note cannot fail a
-    release.
+    A layout change must go through a full attended installation, never an
+    incremental one.  The rule is a build-time assertion rather than a note in
+    a document, because a note cannot fail a release.
     """
     described = subprocess.run(['git', '-C', str(project), 'describe', '--tags', '--abbrev=0'],
                                env=env, capture_output=True, text=True)
@@ -277,36 +276,15 @@ def main():
         if stage == 'bundle':
             destination = out / 'bundle'
             destination.mkdir()
-            # Ship the project-owned Android return module and its host tools
-            # with the same image; upstream KernelSU binaries remain fetched
-            # from their pinned release rather than copied from a test tablet.
-            ksu_out = out / 'ksu-module'
-            subprocess.run(['sh', str(project / 'tools/build-ksu-module.sh')],
-                           env=dict(env, OUT_DIR=str(ksu_out)), check=True)
-            ksu_modules = list(ksu_out.glob('liuqin_boot_ubuntu-*.zip'))
-            if len(ksu_modules) != 1:
-                parser.error('Expected exactly one KernelSU return module')
-            dualboot_tools = out / 'dualboot-tools.zip'
-            with zipfile.ZipFile(dualboot_tools, 'w', zipfile.ZIP_DEFLATED) as archive:
-                for name in ('tools/fetch-kernelsu-assets.sh',
-                             'tools/patch-android-boot-ksu.py',
-                             'tools/lib/kernelsu-assets.json',
-                             'device/android/ksu-boot-ubuntu/README.md', 'LICENSE', 'NOTICE'):
-                    entry = zipfile.ZipInfo(name, date_time=(1980, 1, 1, 0, 0, 0))
-                    entry.compress_type = zipfile.ZIP_DEFLATED
-                    entry.external_attr = 0o644 << 16
-                    archive.writestr(entry, (project / name).read_bytes())
             files = {'boot.img': out / 'boot/boot-liuqin-native.img',
                      'installer.img': (Path(supplied['INSTALLER_IMG']) if args.distro == 'fedora'
                                        else out / 'installer/boot-liuqin-native.img'),
                      'rootfs.tar.gz': out / 'root/rootfs.tar.gz',
                      'install.py': project / 'tools/install-liuqin.py',
                      'liuqin_layout.py': project / 'tools/lib/liuqin_layout.py',
-                     'liuqin-rom-images.json': project / 'tools/lib/liuqin-rom-images.json',
                      'INSTALL-TESTING.en.md': project / 'docs/INSTALL-TESTING.en.md',
                      'INSTALL-TESTING.md': project / 'docs/INSTALL-TESTING.md',
                      'NOTICE': project / 'NOTICE', 'LICENSE': project / 'LICENSE',
-                     ksu_modules[0].name: ksu_modules[0], 'dualboot-tools.zip': dualboot_tools,
                      'FINGERPRINT.en.md': project / 'docs/FINGERPRINT.en.md',
                      'FINGERPRINT.md': project / 'docs/FINGERPRINT.md',
                      'fingerprint-build-inputs.tar.gz': Path(supplied['FINGERPRINT_BUNDLE'])}
@@ -353,8 +331,7 @@ def main():
                         'project_dirty': bool(subprocess.check_output(['git', '-C', str(project), 'status', '--porcelain'], env=env)),
                         'kernel_release': (kernel / 'include/config/kernel.release').read_text().strip(),
                         'features': {'displayport': True,
-                                     'native_fingerprint': bool(supplied.get('FINGERPRINT_BUNDLE')),
-                                     'kernelsu_return_module': ksu_modules[0].name},
+                                     'native_fingerprint': bool(supplied.get('FINGERPRINT_BUNDLE'))},
                         'files': hashes}
             (destination / 'bundle.json').write_text(json.dumps(metadata, indent=2) + '\n')
             hashes['bundle.json'] = hashlib.sha256((destination / 'bundle.json').read_bytes()).hexdigest()

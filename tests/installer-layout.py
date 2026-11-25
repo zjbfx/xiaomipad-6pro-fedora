@@ -16,11 +16,11 @@ requirement is a device-identity rule and is exercised separately.
 Loop devices are not available in CI, so every sgdisk call operates on the
 image file directly.
 """
+import copy
 import hashlib
 import importlib.util
 import json
 from pathlib import Path
-import shutil
 import subprocess
 import sys
 import tempfile
@@ -63,10 +63,7 @@ def build_stock_image(path):
     sgdisk('--set-alignment=1',
            f'--new={userdata[0]}:{userdata[1] * SCALE}:{disk.last_usable}',
            f'--typecode={userdata[0]}:0FC63DAF-8483-4772-8E79-3D69D8477DE4',
-           f'--change-name={userdata[0]}:{layout.USERDATA_NAME}',
-           # A non-default attribute bit, so that "attributes are preserved"
-           # is a claim this test can actually fail.
-           f'--attributes={userdata[0]}:set:60', path)
+           f'--change-name={userdata[0]}:{layout.USERDATA_NAME}', path)
     return layout.parse_print(sgdisk('-p', path))
 
 
@@ -74,12 +71,8 @@ def read(path):
     return layout.parse_print(sgdisk('-p', path))
 
 
-def info(path, number):
-    return layout.parse_info(sgdisk('-i', str(number), path))
-
-
-def apply(path, plan, userdata_info):
-    sgdisk(*layout.sgdisk_arguments(plan, str(path), userdata_info))
+def apply(path, plan):
+    sgdisk(*layout.sgdisk_arguments(plan, str(path)))
     return read(path)
 
 
@@ -105,10 +98,9 @@ def requested(entry, gib):
     return gib * layout.GIB <= entry.size < gib * layout.GIB + layout.ALIGNMENT
 
 
-def plan_for(disk, mode, android=None, root=None):
+def plan_for(disk, root=None):
     region = disk.usable_end - disk.by_name(layout.USERDATA_NAME).start
-    sizes = layout.resolve_sizes(mode, android, root, region)
-    return layout.plan_layout(disk, mode, *sizes)
+    return layout.plan_layout(disk, layout.resolve_sizes(root, region))
 
 
 with tempfile.TemporaryDirectory(prefix='liuqin-layout-test-') as directory:
@@ -116,7 +108,6 @@ with tempfile.TemporaryDirectory(prefix='liuqin-layout-test-') as directory:
     image = work / 'sda.img'
     stock = build_stock_image(image)
     pristine = sgdisk('-p', image)
-    userdata_info = info(image, 35)
 
     check('the synthetic table reproduces the factory geometry',
           len(stock.partitions) == layout.STOCK_PARTITION_COUNT
@@ -135,34 +126,45 @@ with tempfile.TemporaryDirectory(prefix='liuqin-layout-test-') as directory:
 
     region = stock.usable_end - stock.by_name(layout.USERDATA_NAME).start
 
-    # --- dual, default sizes -------------------------------------------------
-    plan = plan_for(stock, 'dual')
-    check('dual defaults are 96 GiB Android and 32 GiB root',
-          requested(plan.entry('userdata'), 96) and requested(plan.entry(layout.ROOT_NAME), 32),
+    # --- Linux-only default ------------------------------------------------
+    plan = plan_for(stock)
+    check('the default plan deletes userdata and reserves 32 GiB for linux_root',
+          plan.entry('userdata').action == 'delete'
+          and requested(plan.entry(layout.ROOT_NAME), 32)
+          and plan.entry(layout.HOME_NAME).size > 190 * layout.GIB,
           plan.table())
-    after = apply(image, plan, userdata_info)
+    check('linux_root starts on a 4 MiB boundary after the deleted userdata',
+          plan.entry(layout.ROOT_NAME).start % layout.ALIGNMENT == 0
+          and plan.entry(layout.ROOT_NAME).start >= stock.by_name('userdata').start)
+    after = apply(image, plan)
     layout.verify_applied(after, plan)
-    layout.verify_preserved(userdata_info, info(image, 35))
-    check('dual: userdata keeps its start, type GUID, unique GUID and attributes',
-          info(image, 35)['guid'] == userdata_info['guid']
-          and info(image, 35)['attributes'] == userdata_info['attributes']
-          and info(image, 35)['first_sector'] == userdata_info['first_sector'])
-    check('dual: the two Linux partitions exist and fill the tail',
-          after.by_name(layout.ROOT_NAME) is not None
+    check('applying the plan removes userdata and creates the two Linux partitions',
+          after.by_name(layout.USERDATA_NAME) is None
+          and after.by_name(layout.ROOT_NAME) is not None
           and after.by_name(layout.HOME_NAME) is not None
           and after.by_name(layout.HOME_NAME).last_sector == after.last_usable)
-    for item in plan.entries:
-        if item.action != 'delete':
-            check(f'{item.name} starts on a 4 MiB boundary or keeps its factory start',
-                  item.start % layout.ALIGNMENT == 0 or item.start == stock.by_name('userdata').start,
-                  str(item.start))
     check('a table this installer wrote classifies as split', layout.classify(after) == 'split',
           layout.classify(after))
-    split_state = after
 
-    # --- split: sizes are not negotiable ------------------------------------
-    check('an existing split layout keeps its sizes; only --keep-home reinstalls',
-          layout.classify(split_state) == 'split')
+    # --- legacy three-partition recognition --------------------------------
+    # The former dual-boot installer left userdata, linux_root and linux_home
+    # in the tail.  That shape is recognized, but never planned again.
+    build_stock_image(image)
+    disk = read(image)
+    sector = disk.sector_size
+    start = disk.by_name(layout.USERDATA_NAME).first_sector
+    android_end = layout.align_up(start * sector + 96 * layout.GIB) // sector - 1
+    root_start = android_end + 1
+    root_end = layout.align_up(root_start * sector + 32 * layout.GIB) // sector - 1
+    sgdisk('--set-alignment=1', '--delete=35',
+           f'--new=35:{start}:{android_end}', '--typecode=35:8300', '--change-name=35:userdata',
+           f'--new=36:{root_start}:{root_end}', '--typecode=36:8300', '--change-name=36:linux_root',
+           f'--new=37:{root_end + 1}:{disk.last_usable}', '--typecode=37:8300',
+           '--change-name=37:linux_home', image)
+    check('the former dual-boot tail still classifies as split, not unknown',
+          layout.classify(read(image)) == 'split', layout.classify(read(image)))
+    build_stock_image(image)
+    stock = read(image)
 
     # --- backup / restore round trip ----------------------------------------
     saved = {}
@@ -185,9 +187,8 @@ with tempfile.TemporaryDirectory(prefix='liuqin-layout-test-') as directory:
     (work / 'manifest.json').write_text(json.dumps(manifest))
     fresh = sgdisk('-p', image)
     stock = read(image)
-    userdata_info = info(image, 35)
-    apply(image, plan_for(stock, 'linux-only'), userdata_info)
-    check('linux-only deletes userdata and gives Ubuntu the whole tail',
+    apply(image, plan_for(stock))
+    check('linux-only deletes userdata and gives Linux the whole tail',
           read(image).by_name(layout.USERDATA_NAME) is None
           and read(image).by_name(layout.ROOT_NAME) is not None)
     with image.open('r+b') as stream:
@@ -200,59 +201,35 @@ with tempfile.TemporaryDirectory(prefix='liuqin-layout-test-') as directory:
           hashlib.sha256(head + b'x').hexdigest() != manifest['files']['sda-head.bin'])
     sgdisk('-v', image)
 
-    # --- linux-only default --------------------------------------------------
-    stock = read(image)
-    userdata_info = info(image, 35)
-    plan = plan_for(stock, 'linux-only')
-    check('linux-only reserves no Android data partition',
-          plan.entry('userdata').action == 'delete'
-          and requested(plan.entry(layout.ROOT_NAME), 32)
-          and plan.entry(layout.HOME_NAME).size > 190 * layout.GIB,
-          plan.table())
-    check('linux_root starts on a 4 MiB boundary after the deleted userdata',
-          plan.entry(layout.ROOT_NAME).start % layout.ALIGNMENT == 0
-          and plan.entry(layout.ROOT_NAME).start >= stock.by_name('userdata').start)
-
     # --- custom sizes and percentages ---------------------------------------
-    plan = plan_for(stock, 'dual', '64G', '48G')
-    check('explicit sizes are honoured, rounded up to the 4 MiB boundary only',
-          requested(plan.entry('userdata'), 64) and requested(plan.entry(layout.ROOT_NAME), 48),
-          plan.table())
-    after = apply(image, plan, userdata_info)
+    stock = read(image)
+    plan = plan_for(stock, '48G')
+    check('an explicit root size is honoured, rounded up to the 4 MiB boundary only',
+          requested(plan.entry(layout.ROOT_NAME), 48), plan.table())
+    after = apply(image, plan)
     layout.verify_applied(after, plan)
     build_stock_image(image)
-    stock, userdata_info = read(image), info(image, 35)
+    stock = read(image)
 
     half = layout.parse_size('50%', region)
     check('a percentage is taken from the whole tail region',
           abs(half - region // 2) <= 1, f'{half} vs {region // 2}')
-    plan = plan_for(stock, 'dual', '50%', '10%')
-    check('percentage sizes produce an aligned, complete layout',
+    plan = plan_for(stock, '10%')
+    check('a percentage root size produces an aligned, complete layout',
           plan.entry(layout.ROOT_NAME).start % layout.ALIGNMENT == 0
           and plan.entry(layout.HOME_NAME).end == stock.usable_end
-          and abs(plan.entry('userdata').size - region // 2) < layout.ALIGNMENT, plan.table())
+          and abs(plan.entry(layout.ROOT_NAME).size - region // 10) < layout.ALIGNMENT,
+          plan.table())
     refuses('a percentage above 100 is refused',
             lambda: layout.parse_size('140%', region), 'between 0 and 100')
     refuses('a size without a recognised unit is refused',
             lambda: layout.parse_size('32 gigs', region), 'NNG')
 
     # --- minimums ------------------------------------------------------------
-    refuses('an Android partition below 16 GiB is refused',
-            lambda: plan_for(stock, 'dual', '8G', '32G'), 'must be between 16.0 GiB')
     refuses('a root below 16 GiB is refused',
-            lambda: plan_for(stock, 'linux-only', '0', '8G'), 'must be between 16.0 GiB')
+            lambda: plan_for(stock, '8G'), 'must be between 16.0 GiB')
     refuses('a layout that leaves less than 8 GiB for /home is refused',
-            lambda: plan_for(stock, 'dual', '96G', '200G'), 'linux_home')
-    refuses('dual with --android-size 0 is refused',
-            lambda: plan_for(stock, 'dual', '0', '32G'), 'linux-only')
-    for text in ('16G', '224G'):
-        message = ''
-        try:
-            plan_for(stock, 'dual', text, '32G')
-        except layout.LayoutError as error:
-            message = str(error)
-        check(f'the refusal for --android-size {text} names the feasible range',
-              'must be between' in message or message == '', message)
+            lambda: plan_for(stock, '200G'), 'linux_home')
 
     # --- unknown layouts -----------------------------------------------------
     sgdisk('--set-alignment=1', '--change-name=35:something_else', image)
@@ -275,15 +252,18 @@ with tempfile.TemporaryDirectory(prefix='liuqin-layout-test-') as directory:
         files[name] = hashlib.sha256(name.encode()).hexdigest()
     (bundle / 'bundle.json').write_text(json.dumps({'device': 'liuqin', 'files': files}))
     base = [sys.executable, str(project / 'tools/install-liuqin.py'), '--bundle', str(bundle), '--check']
-    preview = subprocess.run(base + ['--layout', 'dual'], capture_output=True, text=True)
-    check('--check --layout dual prints the plan without touching a device',
+    preview = subprocess.run(base, capture_output=True, text=True)
+    check('--check prints the Linux-only plan without touching a device',
           preview.returncode == 0 and 'linux_root' in preview.stdout and 'userdata' in preview.stdout,
           preview.stdout + preview.stderr)
     print(preview.stdout.strip())
-    bad = subprocess.run(base + ['--layout', 'dual', '--android-size', '4G'], capture_output=True, text=True)
-    check('--check rejects an out-of-range size and prints the feasible range',
+    dual = subprocess.run(base + ['--layout', 'dual'], capture_output=True, text=True)
+    check('--layout dual is no longer accepted',
+          dual.returncode != 0 and 'invalid choice' in dual.stderr, dual.stderr)
+    bad = subprocess.run(base + ['--root-size', '8G'], capture_output=True, text=True)
+    check('--check rejects an out-of-range root size and prints the feasible range',
           bad.returncode != 0 and 'must be between' in bad.stderr, bad.stderr)
-    both = subprocess.run(base + ['--layout', 'dual', '--keep-home', '--root-size', '32G'],
+    both = subprocess.run(base + ['--keep-home', '--root-size', '32G'],
                           capture_output=True, text=True)
     check('--keep-home and an explicit size together are refused',
           both.returncode != 0, both.stderr)
@@ -293,7 +273,6 @@ if failures:
 print('PASS: partition layout engine; no device, no loop device, no evidence dump')
 
 # Geometry and preserved partitions must not be inferred merely from a tail name.
-import copy
 for mutation in ('missing-prefix','renamed-prefix','overlap','duplicate-number','out-of-bounds'):
     disk=copy.deepcopy(layout.reference_stock_disk())
     if mutation=='missing-prefix': del disk.partitions[2]
@@ -310,6 +289,6 @@ for capacity in (128,512):
     # Change numbering without changing partition order or names.
     for part in disk.partitions: part.number+=2
     assert layout.classify(disk)=='stock'
-    plan=plan_for(disk,'linux-only')
+    plan=plan_for(disk)
     assert plan.entry(layout.ROOT_NAME).number not in {p.number for p in disk.partitions}
 print('PASS: preserved partitions, overlap, duplicate numbers, bounds and capacity-independent numbering')

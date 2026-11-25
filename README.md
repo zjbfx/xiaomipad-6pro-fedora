@@ -1,53 +1,39 @@
-# Ubuntu for Xiaomi Pad 6 Pro
+# Fedora for Xiaomi Pad 6 Pro
 
-在 Xiaomi Pad 6 Pro（代号 `liuqin`，骁龙 8+ Gen 1）上原生运行 Ubuntu 26.04 GNOME 桌面，可与 Android 双系统共存，内核基于上游 Linux 适配。[English](README.en.md)
+在 Xiaomi Pad 6 Pro（代号 `liuqin`，骁龙 8+ Gen 1）上原生运行 Fedora Workstation GNOME 桌面。单系统安装：不保留、不写入 Android。内核基于上游 Linux 适配。[English](README.en.md)
 
-**最新版本见 [Releases](https://github.com/yzddmr6/xiaomipad-6pro-mainline/releases/latest)。官方发布只在本仓库 Releases，免费提供。** 支持状态见[硬件支持](#硬件支持)。
+本项目从 [yzddmr6/xiaomipad-6pro-mainline](https://github.com/yzddmr6/xiaomipad-6pro-mainline) 的 Fedora 移植分支独立而来，只维护 Fedora 路径，不提供 Ubuntu 或双系统安装。内核、设备树、boot 镜像组装与安装机制来自上游；内核源码见 [linux-sm8450-liuqin](https://github.com/yzddmr6/linux-sm8450-liuqin)。
 
-## 📮 关注与交流
-
-最新进展动态、使用技巧和 AI 讨论会先在公众号和小红书更新；刷机遇到问题也欢迎反馈。
-
-| 公众号：熵减矩阵 | 小红书：yzddmr6 |
-|:---:|:---:|
-| <img src="docs/assets/gzh-qr.png" width="200" alt="公众号：熵减矩阵"> | <img src="docs/assets/xhs-qr.jpg" width="200" alt="小红书：yzddmr6"> |
-| 进展动态 · 使用技巧 · AI 讨论 | 使用分享 · 问题反馈 |
+本项目不发布预编译安装包。安装包需按 [Fedora 说明](docs/FEDORA.zh-CN.md) 在 Fedora 主机上自行构建；构建所需的 `installer.img` 与指纹公开输入来自上游 v0.8.0 发布包。
 
 ## ⚠️ 安装前请阅读
 
 本项目仅适用于 **Xiaomi Pad 6 Pro（liuqin，SM8475）**。其他小米平板型号不适用。
 
 - **这是实验性项目。** 安装会解锁、重分区、清空数据；操作不当可能导致设备无法启动。请按安装指南操作，并保留备份。
+- **纯 Linux 安装。** 安装器删除 Android 的 `userdata` 分区，把磁盘尾部交给 `linux_root` 与 `linux_home`，只写 `boot_b` 并从 B 槽启动。不会保留 Android，也不提供双系统切换。
 - **数据清除**：解锁 Bootloader 和首次安装会清除用户数据，请提前备份。
-- **只在 256 GB 机型上验证过。** 128 GB 与 512 GB 机型的出厂分区结构相同，安装器同样接受，但未经验证；改过分区的设备不支持安装。安装器会重新划分磁盘尾部，不要绕过校验。
-- **双系统**：双系统布局保留原厂 Android，两个系统都从 A 槽启动，切换时把另一系统的 boot 镜像写入 `boot_a`。不要使用 KernelSU 的“安装到未使用的槽位”，不要再次运行原厂 `flash_all` 脚本，系统更新须冻结；槽位规则见[安装步骤](docs/INSTALL-TESTING.md#双系统切换)。
-- **恢复准备**：安装前请准备对应的原厂固件，并阅读[数据与恢复说明](docs/FLASHING.md#数据与恢复)。
+- **只在 256 GB 机型上由上游验证过。** 128 GB 与 512 GB 机型的出厂分区结构相同，安装器同样接受，但未逐一验证；改过分区的设备不支持安装。安装器会重新划分磁盘尾部，不要绕过校验。
+- **原厂固件基线。** 上游验证使用 HyperOS OS2.0.6.0；本机为 OS3。恢复 Android 前请核对防回滚版本，刷入低于设备已熔断版本的固件会使平板变砖。
+- **恢复准备**：安装前请准备与本机匹配的原厂固件，并阅读[数据与恢复说明](docs/FLASHING.md#数据与恢复)。
 - **功能限制**：部分硬件功能尚不完整，请先查看下方硬件支持表。
 
 出厂校准与设备地址必须来自本机，不可跨设备复制。
 
 ## 🚀 获取与安装
 
-请从 [GitHub Releases](https://github.com/yzddmr6/xiaomipad-6pro-mainline/releases/latest) 下载同一版本的完整安装包，不要混用不同版本的文件。
-
 | 我想要 | 入口 |
 |---|---|
-| 安装 Ubuntu | [安装指南](docs/FLASHING.md) |
+| 构建 Fedora 安装包 | [Fedora 说明](docs/FEDORA.zh-CN.md) |
+| 安装 Fedora | [安装步骤](docs/INSTALL-TESTING.md) |
 | 升级已安装的系统 | [升级已安装的系统](docs/INSTALL-TESTING.md#升级已安装的系统) |
-| 自行编译内核和设备组件 | [构建指南](docs/BUILD.md) |
 | 恢复 Android | [数据与恢复说明](docs/FLASHING.md#数据与恢复) |
 
-预编译安装包包括匹配的启动镜像、根文件系统、安装工具与校验文件。
-
-## 🐧 Fedora Workstation
-
-本仓库是 [yzddmr6/xiaomipad-6pro-mainline](https://github.com/yzddmr6/xiaomipad-6pro-mainline) 的 fork，额外提供 Fedora Workstation 变体。内核、启动镜像、设备层与安装流程和 Ubuntu 路径共用，只有根文件系统与设备层的打包方式不同。
-
-Fedora 根文件系统用 `dnf --installroot` 从官方 aarch64 仓库构建，设备层以文件树而非软件包安装；构建与安装说明见 [Fedora 说明](docs/FEDORA.zh-CN.md)（目前为中文）。Fedora 路径按单系统（Linux-only）安装验证。
+安装包包括匹配的启动镜像、根文件系统、安装工具与校验文件。不同版本的启动镜像与系统组件不能混用。
 
 ## 硬件支持
 
-以下为最新发布版本的支持情况。✅ 可用 · 🟡 部分支持 · ❌ 不支持。
+以下为 v0.8.0 内核与 Fedora 设备层的支持情况。✅ 可用 · 🟡 部分支持 · ❌ 不支持。
 器件信息来自本项目已确认的板级资料和设备树。
 
 功能速览，具体范围见下表：
@@ -61,7 +47,7 @@ Fedora 根文件系统用 `dnf --installroot` 从官方 aarch64 仓库构建，�
 
 | 功能 | 器件 / 实现 | 状态 | 说明 |
 |---|---|---|---|
-| SoC / CPU | Qualcomm Snapdragon 8+ Gen 1（SM8475），ARM64 | ✅ 可用 | 主线内核与 Ubuntu 桌面运行 |
+| SoC / CPU | Qualcomm Snapdragon 8+ Gen 1（SM8475），ARM64 | ✅ 可用 | 主线内核与 Fedora 桌面运行 |
 | GPU / 桌面合成 | Adreno 730 / Freedreno / Turnip / Mesa | ✅ 可用 | 桌面合成与应用的 OpenGL ES、Vulkan 硬件加速，使用发行版 Mesa |
 | 内置存储 | UFS / ext4 | ✅ 可用 | 独立的系统分区与 `/home` 分区 |
 | 内置显示 | Novatek NT36532 / 双 DSI / DSC | ✅ 可用 | 2880×1800，120 Hz |
@@ -112,35 +98,31 @@ Fedora 根文件系统用 `dnf --installroot` 从官方 aarch64 仓库构建，�
 
 ## 使用与维护
 
-每天匿名检查一次 GitHub 上的最新版本，有新版时提示；可在通知设置中关闭。
-
-Ubuntu 软件包通过 APT 管理。项目内核与设备组件随安装包整体更新：升级时用新版安装包执行保留 `/home` 的重装，见[升级已安装的系统](docs/INSTALL-TESTING.md#升级已安装的系统)。不要混用不同版本的启动镜像和系统组件。
+Fedora 软件包通过 DNF 管理。项目内核与设备组件随安装包整体更新：升级时用新版安装包执行保留 `/home` 的重装，见[升级已安装的系统](docs/INSTALL-TESTING.md#升级已安装的系统)。不要混用不同版本的启动镜像和系统组件。
 
 **开发者模式。** `sudo liuqin-devmode on` 开启经 USB 线的 root SSH 登录，默认关闭，只接受密钥登录；安装时加 `--enable-rescue` 会写入主机的公钥。开启期间平板不会自动挂起。主机上用 `python3 tools/liuqin-devmode-ssh.py root` 连接，用完执行 `sudo liuqin-devmode off`。
-
-如需在 Ubuntu 中运行 Android 应用，可使用 Waydroid；所需内核配置已内置，
-见 [Waydroid 支持](docs/WAYDROID.md)。
 
 充电功率由厂商充电器认证路径协商，见 [快充](docs/FASTCHARGE.md)。
 
 遇到问题时，请提供设备型号、系统版本、复现步骤和相关日志，并通过 GitHub Issues 反馈。
-提交日志前，请移除密码、网络凭据和个人信息。使用交流也可通过顶部的公众号与小红书进行。
+提交日志前，请移除密码、网络凭据和个人信息。
 
 ## 开发与贡献
 
 | 仓库 | 内容 |
 |---|---|
-| xiaomipad-6pro-mainline | 设备配置、用户态适配、构建与安装工具、文档 |
+| xiaomipad-6pro-fedora | Fedora 设备层、构建与安装工具、文档（本仓库） |
+| [xiaomipad-6pro-mainline](https://github.com/yzddmr6/xiaomipad-6pro-mainline) | 上游项目：Ubuntu、设备层与安装工具 |
 | [linux-sm8450-liuqin](https://github.com/yzddmr6/linux-sm8450-liuqin) | 完整 Linux 内核源码与设备适配提交 |
 
 构建使用的内核提交记录在 [kernel/source.json](kernel/source.json)。
-内核分支为 `liuqin-6.17`。欢迎改进驱动、构建工具与文档，提交方式见
+内核分支为 `liuqin-6.17`。欢迎改进 Fedora 设备层、构建工具与文档，提交方式见
 [参与贡献](CONTRIBUTING.md)。
 
 ## 致谢与许可证
 
-本项目基于 [sm8450-mainline](https://github.com/sm8450-mainline/linux) 的内核工作，
-并使用 Ubuntu、GNOME、Freedreno 和 Linux Qualcomm 社区的成果。
+本项目基于 [yzddmr6/xiaomipad-6pro-mainline](https://github.com/yzddmr6/xiaomipad-6pro-mainline)，
+其内核工作来自 [sm8450-mainline](https://github.com/sm8450-mainline/linux)，并使用 Fedora、GNOME、Freedreno 和 Linux Qualcomm 社区的成果。
 
 除文件另有声明外，项目原创代码采用 MIT 许可证。Linux 内核及第三方组件保留各自许可证；
 固件适用其权利人的授权条款。详见 [LICENSE](LICENSE) 与 [NOTICE](NOTICE)。

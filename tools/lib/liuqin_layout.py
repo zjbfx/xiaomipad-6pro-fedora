@@ -2,23 +2,18 @@
 # SPDX-License-Identifier: MIT
 """Partition layout engine for the liuqin installer.
 
-One engine serves both installation modes.  Slot assignment is not a layout
-decision and is not made here: the installer (``tools/install-liuqin.py``,
-``boot_slots``) boots both systems from slot A in the dual layout, with the
-Android boot image rotated through ``boot_a`` by ``liuqin-switch``, and keeps
-Ubuntu in slot B in the Linux-only layout.  The modes differ here only in the
-size given to the Android ``userdata`` partition and in whether the Android
-system is provisioned at all.
+This project installs Linux only.  The Android ``userdata`` partition is
+deleted and ``linux_root`` plus ``linux_home`` take the whole tail of ``sda``::
 
-The tail of ``sda`` is laid out as::
-
-    userdata (Android, shrunk in place)  ->  linux_root  ->  linux_home
+    linux_root  ->  linux_home
 
 ``userdata`` is the last partition on the disk and nothing follows it, so no
-existing partition ever moves.  ``userdata`` keeps its original type GUID,
-unique GUID, name and attribute bits; only its end sector changes.  With an
-Android size of zero the partition is deleted outright and Ubuntu receives the
-whole tail.
+existing partition ever moves.  The two Linux partitions are created in the
+table's free entries; the deleted entry is left unused so the numbering of an
+installed table is stable across reinstalls.
+
+Slot assignment is not a layout decision and is not made here: the installer
+(``tools/install-liuqin.py``) keeps Linux in slot B and writes ``boot_b``.
 
 Every function here is pure: it parses ``sgdisk`` output, computes a plan and
 renders the ``sgdisk`` arguments that realize it.  Nothing in this module opens
@@ -45,20 +40,17 @@ ROOT_NAME = 'linux_root'
 HOME_NAME = 'linux_home'
 ROOT_LABEL = 'LIUQIN_ROOT'
 HOME_LABEL = 'LIUQIN_HOME'
-METADATA_NAME = 'metadata'
 LINUX_TYPECODE = '8300'
 
-MIN_ANDROID = 16 * GIB
 MIN_ROOT = 16 * GIB
 MIN_HOME = 8 * GIB
 
-MODES = ('linux-only', 'dual')
-DEFAULT_SIZES = {'dual': ('96G', '32G'), 'linux-only': ('0', '32G')}
+DEFAULT_ROOT = '32G'
 
-# Bytes zeroed at the head of userdata and metadata so that Android reformats
-# them on first boot instead of finding stale FBE keys, and so that no stale
-# LIUQIN_ROOT ext4 superblock survives where the old whole-userdata root was.
-WIPE_BYTES = 16 * MIB
+# A legacy split built by the dual-boot installer kept an Android userdata of
+# at least 16 GiB before linux_root.  The engine recognizes that shape so an
+# existing install can be identified, but it never creates one again.
+MIN_LEGACY_ANDROID = 16 * GIB
 
 
 # The factory partition table of the 256 GB liuqin, taken from a read-only
@@ -226,7 +218,7 @@ def parse_print(text):
 
 
 def parse_info(text):
-    """Parse the output of ``sgdisk -i N DEVICE`` into the fields we preserve."""
+    """Parse the output of ``sgdisk -i N DEVICE`` into the fields we check."""
 
     def one(pattern, label):
         match = re.search(pattern, text, re.MULTILINE)
@@ -262,6 +254,9 @@ def classify(disk):
 
     Names, ordering and nonoverlapping geometry identify the layout. Capacity
     variants may use other partition numbers and different super/tail sizes.
+    A three-partition tail (userdata, linux_root, linux_home) is the layout the
+    former dual-boot installer wrote; it is recognized so an existing install
+    can be identified, but this engine never creates it.
     """
     if not valid_geometry(disk):
         return 'unknown'
@@ -278,7 +273,7 @@ def classify(disk):
             root.start % ALIGNMENT or home.start % ALIGNMENT or
             root.end != home.start or home.last_sector != disk.last_usable):
         return 'unknown'
-    if len(tail) == 3 and (tail[0].size < MIN_ANDROID or tail[0].end != root.start):
+    if len(tail) == 3 and (tail[0].size < MIN_LEGACY_ANDROID or tail[0].end != root.start):
         return 'unknown'
     return 'split'
 
@@ -328,8 +323,7 @@ class Entry:
 
 
 class Plan:
-    def __init__(self, mode, disk, entries, region_start, region_end, keep_home=False):
-        self.mode = mode
+    def __init__(self, disk, entries, region_start, region_end, keep_home=False):
         self.disk = disk
         self.entries = entries
         self.region_start = region_start
@@ -357,49 +351,32 @@ def _feasible(region, label, minimum, others):
             f'on this {human(region)} region')
 
 
-def plan_layout(disk, mode, android, root, keep_home=False):
-    """Compute the tail layout.  ``android`` and ``root`` are byte counts."""
-    if mode not in MODES:
-        raise LayoutError('unknown layout mode: ' + str(mode))
+def plan_layout(disk, root, keep_home=False):
+    """Compute the Linux-only tail layout.  ``root`` is a byte count."""
     userdata = disk.by_name(USERDATA_NAME)
     if userdata is None:
         raise LayoutError('the partition table has no userdata partition')
     region_start = userdata.start
     region_end = disk.usable_end
     region = region_end - region_start
-    if mode == 'dual' and android == 0:
-        raise LayoutError('dual layout needs a non-zero --android-size; use'
-                          ' --layout linux-only to remove Android entirely')
-    if android and android < MIN_ANDROID:
-        raise LayoutError('--android-size ' + human(android) + ' is too small: '
-                          + _feasible(region, 'the Android userdata partition', MIN_ANDROID,
-                                      MIN_ROOT + MIN_HOME))
     if root < MIN_ROOT:
         raise LayoutError('--root-size ' + human(root) + ' is too small: '
-                          + _feasible(region, 'linux_root', MIN_ROOT, MIN_HOME + android))
+                          + _feasible(region, 'linux_root', MIN_ROOT, MIN_HOME))
     entries = []
-    cursor = region_start
-    if android:
-        end = align_up(cursor + android)
-        entries.append(Entry(userdata.number, USERDATA_NAME, cursor, end, 'shrink',
-                             f'shrink from {human(userdata.size)} '
-                             '(keep type GUID, unique GUID and attributes)'))
-        cursor = end
-    else:
-        entries.append(Entry(userdata.number, USERDATA_NAME, region_start, region_end, 'delete',
-                             'delete (Ubuntu takes the whole tail; no Android data partition)'))
-        cursor = align_up(cursor)
+    cursor = align_up(region_start)
+    entries.append(Entry(userdata.number, USERDATA_NAME, region_start, region_end, 'delete',
+                         'delete (Linux takes the whole tail; no Android data partition)'))
     root_end = align_up(cursor + root)
     if root_end + MIN_HOME > region_end:
         raise LayoutError(
             'the requested sizes leave less than ' + human(MIN_HOME) + ' for linux_home: '
-            + _feasible(region, 'linux_root', MIN_ROOT, MIN_HOME + align_up(android)))
+            + _feasible(region, 'linux_root', MIN_ROOT, MIN_HOME))
     used = {part.number for part in disk.partitions}
     free_numbers = [n for n in range(1, disk.entry_count + 1) if n not in used]
     if len(free_numbers) < 2:
         raise LayoutError('two unused GPT entries are required')
     entries.append(Entry(free_numbers[0], ROOT_NAME, cursor, root_end, 'create',
-                         f'create ext4 LABEL={ROOT_LABEL} (Ubuntu system)'))
+                         f'create ext4 LABEL={ROOT_LABEL} (Linux system)'))
     entries.append(Entry(free_numbers[1], HOME_NAME, root_end, region_end, 'create',
                          f'create ext4 LABEL={HOME_LABEL} (mounted at /home)'))
     if entries[-1].size < MIN_HOME:
@@ -412,10 +389,10 @@ def plan_layout(disk, mode, android, root, keep_home=False):
             raise LayoutError('the computed layout leaves the usable area of the disk')
         if item.start % disk.sector_size or item.end % disk.sector_size:
             raise LayoutError('the computed layout is not a whole number of sectors')
-    return Plan(mode, disk, entries, region_start, region_end, keep_home)
+    return Plan(disk, entries, region_start, region_end, keep_home)
 
 
-def sgdisk_arguments(plan, device, userdata_info):
+def sgdisk_arguments(plan, device):
     """Render one sgdisk invocation that realizes the whole plan at once.
 
     A single invocation means a single partition-table write, so the table is
@@ -427,16 +404,6 @@ def sgdisk_arguments(plan, device, userdata_info):
     arguments = ['--set-alignment=1']
     userdata = plan.entry(USERDATA_NAME)
     arguments.append(f'--delete={userdata.number}')
-    if userdata.action != 'delete':
-        if userdata.first_sector(sector) != userdata_info['first_sector']:
-            raise LayoutError('userdata would move; only shrinking in place is supported')
-        arguments += [
-            f'--new={userdata.number}:{userdata.first_sector(sector)}:{userdata.last_sector(sector)}',
-            f'--typecode={userdata.number}:' + userdata_info['typecode'],
-            f'--partition-guid={userdata.number}:' + userdata_info['guid'],
-            f'--change-name={userdata.number}:' + USERDATA_NAME,
-            f'--attributes={userdata.number}:=:' + userdata_info['attributes'],
-        ]
     for item in plan.entries:
         if item.name == USERDATA_NAME:
             continue
@@ -474,17 +441,6 @@ def verify_applied(disk, plan):
     return True
 
 
-def verify_preserved(before, after):
-    """userdata keeps its identity across the edit; only its end sector moves."""
-    for field in ('typecode', 'guid', 'attributes', 'name', 'first_sector'):
-        if str(before[field]).lower() != str(after[field]).lower():
-            raise LayoutError('userdata ' + field.replace('_', ' ') + ' changed across the edit: '
-                              f'{before[field]} -> {after[field]}')
-    return True
-
-
-def resolve_sizes(mode, android, root, region):
-    """Apply the per-mode defaults, then parse both sizes against the region."""
-    default_android, default_root = DEFAULT_SIZES[mode]
-    return (parse_size(default_android if android is None else android, region),
-            parse_size(default_root if root is None else root, region))
+def resolve_sizes(root, region):
+    """Apply the default, then parse the size against the region."""
+    return parse_size(DEFAULT_ROOT if root is None else root, region)

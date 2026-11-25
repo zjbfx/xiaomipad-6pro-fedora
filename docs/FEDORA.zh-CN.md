@@ -5,15 +5,15 @@
 > **状态：第一版，真机日常可用。** 首次安装、首启、GDM 登录、桌面、Wi-Fi、触摸，以及"开机画面
 > 从第一帧就是横屏"已验收；声音、蓝牙、磁吸键盘、挂起恢复、USB OTG 尚未逐项验收。首启一路踩到的
 > 坑（两个弱依赖包、装配丢掉的 setuid 位、dconf profile 指到 Ubuntu 路径）都已在根装配器与
-> preflight 里修掉并前移（见下）。已知未解决：自动旋转指错方向（见 README 的加速度计一行）。
-> 本文说明能做什么、还差什么、以及为什么这样切分。本文暂时只有中文；英文版随移植完成一起补。
+> preflight 里修掉并前移（见下）。本文说明能做什么、还差什么、以及为什么这样切分。
+> 本文暂时只有中文；英文版随移植完成一起补。
 
 首次移植（v0.6.0）的构建结果（Fedora 44 x86_64 主机、aarch64 交叉构建）；v0.8.0 的数字在本次重建后更新：
 
 | 检查 | 结果 |
 |---|---|
 | 根文件树 | 27107 个文件，`rootfs.tar.gz` 684 MB |
-| 首启 initramfs 准入镜像（`preflight`） | PASS（14 个 0755 + 15 个 0644 + 拓扑符号链接逐条核对） |
+| 首启 initramfs 准入镜像（`preflight`） | PASS（18 个 0755 + 32 个 0644 + 拓扑/单元链接逐条核对） |
 | ABL 符号并集 | 1781（与发布版一致） |
 | 设备树 | `b3c2a500…` **与发布版逐字节相同** |
 | boot.img | 50466816 B，`c6019708…` |
@@ -87,9 +87,10 @@ Fedora 把下面两个包只当**弱依赖**引入，而本项目的根装配刻
 2. 同文件的 `preflight` 断言这两个文件存在。
 
 **诊断路径（供以后复用）**：黑屏时 `fastboot boot out/image/bundle/installer.img` 进 RAM 安装器拿 root shell，
-`blockdev --setrw /dev/sda{,35}` 后挂载 `/dev/sda35` 到 `/mnt/install`，再 `chroot /mnt/install/native-root`
-读 `journalctl`；把 `/etc/gdm/custom.conf` 里 `[debug]` 的 `Enable=true` 打开，GDM 才会打印具体分支错误
-（默认只打最后那一句）。开机后要改设备上的东西，可用设备层的 USB 救援通道（见下）。
+`blockdev --setrw /dev/disk/by-partlabel/linux_root` 后把它挂到 `/mnt/install`，再
+`chroot /mnt/install/native-root` 读 `journalctl`；把 `/etc/gdm/custom.conf` 里 `[debug]` 的
+`Enable=true` 打开，GDM 才会打印具体分支错误（默认只打最后那一句）。开机后要改设备上的东西，
+可用设备层的 USB 救援通道（见下）。
 
 > 当前平板上这两个文件是**手工推进去的**（为了少刷一次机）。按上面的流程重新构建根并安装一遍，
 > 它们就会由 RPM 正式安装，rpmdb 记录与 SELinux 标签都正确。
@@ -122,8 +123,8 @@ option set...`（或干脆认证通过却无法提权）。原因不在账号、
 2. 同文件 `preflight`：断言 `/usr/bin/sudo` 是 `4111`、`passwd`/`su`/`pkexec` 等是 `4755`，
    并核对特权文件总数不少于源树 —— 少了就在主机上失败。
 
-**已经装好、但树是旧的平板怎么修**（不用重装、不动 userdata）：进 RAM 安装器，
-`blockdev --setrw /dev/disk/by-partlabel/userdata` 后把它挂到 `/mnt/install`，
+**已经装好、但树是旧的平板怎么修**（不用重装、不动 `/home`）：进 RAM 安装器，
+`blockdev --setrw /dev/disk/by-partlabel/linux_root` 后把它挂到 `/mnt/install`，
 再对 `/mnt/install/native-root` 按清单逐个 `chmod`。清单的来源是**发行版根**（它是对的）：
 
 ```sh
@@ -157,7 +158,7 @@ find out/fedora-rootfs/rootfs -perm /6000 -printf '%m %P\n'   # 16 行，形如 
 2. 同文件 `preflight`：独立复核"覆盖不存在"与"`file-db:` 指向发行版路径" ——
    单独重跑 device 阶段也盖不住。
 
-**已经装好、树是旧的平板怎么修**（不用重装、不动 userdata）：
+**已经装好、树是旧的平板怎么修**（不用重装、不动 `/home`）：
 
 ```sh
 sudo rm -f /etc/dconf/profile/gdm
@@ -203,7 +204,7 @@ sudo dnf group install -y workstation-product-environment    # 现在能过
 
 ## 前置条件
 
-构建主机（已在 **Fedora 44 x86_64** 上开发）：
+构建主机（已在 **Fedora 45 x86_64** 上开发；44 也可用）：
 
 ```sh
 sudo dnf install -y qemu-user-static gcc-aarch64-linux-gnu dtc ccache \
@@ -232,9 +233,10 @@ sudo dnf install -y qemu-user-static gcc-aarch64-linux-gnu dtc ccache \
 
 ```sh
 # 1. Fedora 根（在本机交叉构建 aarch64，不需要 aarch64 硬件）
-#    发行版固定在 Fedora 44（GNOME 50，两个 shell 扩展声明的版本）；
-#    脚本默认就是 44，显式写上以免被主机的 release 带走。
-sudo FEDORA_RELEASE=44 OUT_DIR="$PWD/out/fedora-rootfs" sh tools/build-liuqin-fedora-rootfs.sh all
+#    发行版固定在 Fedora 45（GNOME 51：充电指示扩展声明了 51；osk-guard 只声明 50，
+#    因为 GNOME 51 已删掉它要规避的代码，扩展在 51 上不加载正是预期）。
+#    脚本默认就是 45，显式写上以免被主机的 release 带走。
+sudo FEDORA_RELEASE=45 OUT_DIR="$PWD/out/fedora-rootfs" sh tools/build-liuqin-fedora-rootfs.sh all
 
 # 2. 内核层（复用已发布内核，不再重新编译）
 #    这里的版本号是硬约束：必须用 v0.8.0（内核提交 c25f056e0c20，
@@ -326,7 +328,7 @@ sh tests/persistent-root.sh                          # 准入机制的 fail-clos
 
 ## 真机安装
 
-与 Ubuntu 版流程相同，外加一个**必须做**的手工步骤（发布包与 ABL 的已知问题）：
+安装流程与上游相同，外加一个**必须做**的手工步骤（发布包与 ABL 的已知问题）：
 
 1. **关闭 vbmeta 校验**（否则 ABL 拒绝启动未签名的 boot 镜像，开机直接跳 fastboot）
 

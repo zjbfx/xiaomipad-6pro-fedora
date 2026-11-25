@@ -33,11 +33,12 @@ manifest=$root.manifest
 identity=$out_dir/fedora-rootfs.identity
 
 # Pin the release rather than following the host, so a host upgrade cannot
-# silently change what this tree is.  44 is the release this port was built and
-# device-tested on (GNOME 50, which is what the two shell extensions declare);
-# a later release is a deliberate FEDORA_RELEASE override plus an extension
-# review, not something a host upgrade should hand you.
-fedora_release=${FEDORA_RELEASE:-44}
+# silently change what this tree is.  45 is the release this port targets
+# (GNOME 51); the charging extension declares 51, and the on-screen keyboard
+# guard deliberately declares only 50 because GNOME 51 removed the code it
+# guarded.  Another release is a deliberate FEDORA_RELEASE override plus an
+# extension review, not something a host upgrade should hand you.
+fedora_release=${FEDORA_RELEASE:-45}
 arch=${FEDORA_ARCH:-aarch64}
 # The distribution pieces the device layer and the admission gate depend on
 # (GNOME session, NetworkManager, BlueZ, PipeWire, the sensor proxy), kept as an
