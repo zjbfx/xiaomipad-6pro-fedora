@@ -251,8 +251,8 @@ def main():
             shutil.copytree(out / 'bundle', destination,
                             ignore=shutil.ignore_patterns('rootfs.tar.gz'))
             metadata = json.loads((destination / 'bundle.json').read_text())
-            for name in ('INSTALL-TESTING.md', 'INSTALL-TESTING.zh-CN.md',
-                         'FINGERPRINT.md', 'FINGERPRINT.zh-CN.md'):
+            for name in ('INSTALL-TESTING.en.md', 'INSTALL-TESTING.md',
+                         'FINGERPRINT.en.md', 'FINGERPRINT.md'):
                 shutil.copyfile(project / 'docs' / name, destination / name)
                 metadata['files'][name] = hashlib.sha256((destination / name).read_bytes()).hexdigest()
             if args.device_tested:
@@ -299,21 +299,13 @@ def main():
                      'install.py': project / 'tools/install-liuqin.py',
                      'liuqin_layout.py': project / 'tools/lib/liuqin_layout.py',
                      'liuqin-rom-images.json': project / 'tools/lib/liuqin-rom-images.json',
+                     'INSTALL-TESTING.en.md': project / 'docs/INSTALL-TESTING.en.md',
                      'INSTALL-TESTING.md': project / 'docs/INSTALL-TESTING.md',
-                     'INSTALL-TESTING.zh-CN.md': project / 'docs/INSTALL-TESTING.zh-CN.md',
                      'NOTICE': project / 'NOTICE', 'LICENSE': project / 'LICENSE',
                      ksu_modules[0].name: ksu_modules[0], 'dualboot-tools.zip': dualboot_tools,
+                     'FINGERPRINT.en.md': project / 'docs/FINGERPRINT.en.md',
                      'FINGERPRINT.md': project / 'docs/FINGERPRINT.md',
-                     'FINGERPRINT.zh-CN.md': project / 'docs/FINGERPRINT.zh-CN.md'}
-            if 'FINGERPRINT_BUNDLE' in supplied:
-                # Native fingerprint support ships as its own bundle and is a
-                # required input on both paths.  The key is still tested rather
-                # than assumed: the two input tables are checked against the
-                # supplied object above, so an assembly that reaches here always
-                # has it, and a distribution-layer change that made it optional
-                # again would drop the archive rather than fail on a missing
-                # entry the metadata already records as absent.
-                files['fingerprint-build-inputs.tar.gz'] = Path(supplied['FINGERPRINT_BUNDLE'])
+                     'fingerprint-build-inputs.tar.gz': Path(supplied['FINGERPRINT_BUNDLE'])}
             if args.distro == 'fedora':
                 # The released installer.img carries an install-root.sh and a
                 # root contract of its own vintage, and the contract is the
@@ -351,6 +343,7 @@ def main():
                         # for the right install-root.sh without inferring either
                         # from the files it happens to find.
                         'distro': args.distro,
+                        'version': (project / 'VERSION').read_text().strip(),
                         'kernel_commit': lock['commit'],
                         'project_commit': subprocess.check_output(['git', '-C', str(project), 'rev-parse', 'HEAD'], env=env, text=True).strip(),
                         'project_dirty': bool(subprocess.check_output(['git', '-C', str(project), 'status', '--porcelain'], env=env)),

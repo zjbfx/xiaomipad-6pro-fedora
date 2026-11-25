@@ -1,176 +1,146 @@
-# Ubuntu and Fedora for Xiaomi Pad 6 Pro
+# Ubuntu for Xiaomi Pad 6 Pro
 
-Run Ubuntu 26.04 or Fedora Workstation on the Xiaomi Pad 6 Pro, with the GNOME desktop and a device-adapted kernel based on upstream Linux. [中文](README.zh-CN.md)
+在 Xiaomi Pad 6 Pro（代号 `liuqin`，骁龙 8+ Gen 1）上原生运行 Ubuntu 26.04 GNOME 桌面，可与 Android 双系统共存，内核基于上游 Linux 适配。[English](README.en.md)
 
-This repository is a fork of [yzddmr6/xiaomipad-6pro-mainline](https://github.com/yzddmr6/xiaomipad-6pro-mainline) that adds a Fedora Workstation variant. The kernel, boot images, device layer and installation flow are shared between the two; only the root filesystem and the way the device layer is packaged differ.
+**最新版本见 [Releases](https://github.com/yzddmr6/xiaomipad-6pro-mainline/releases/latest)。官方发布只在本仓库 Releases，免费提供。** 支持状态见[硬件支持](#硬件支持)。
 
-## Latest Release and Recent Updates
+## 📮 关注与交流
 
-**[v0.6.0](https://github.com/yzddmr6/xiaomipad-6pro-mainline/releases/tag/v0.6.0)** is now a full release. Native fingerprint support, DP output and dual-boot fixes are included in one installation bundle. Installation, initial setup and user acceptance passed on the known 256 GB test unit.
+最新进展动态、使用技巧和 AI 讨论会先在公众号和小红书更新；刷机遇到问题也欢迎反馈。
 
-Main updates since the initial open-source release:
-
-- **Native fingerprint login**: enroll in Ubuntu Settings → Users, then unlock the screen or log in after boot. Same-finger acceptance and other-finger rejection are verified; currently limited to the first account and one finger.
-- **DP external display**: external picture, internal-display recovery after unplugging and USB recovery on reconnect are verified. Other adapters, DP audio and high refresh rates remain unverified.
-- **Dual boot and camera**: added an installation layout that preserves Android and a KernelSU module to return to Ubuntu, fixed startup failures caused by stock firmware, added experimental rear-camera support and fixed the speakers. See the installation notes below for dual-boot validation scope and the support table for camera limitations.
-- **Input, recording and charging**: fixed the magnetic keyboard touchpad, added touch-panel variants, USB OTG, single-microphone recording and charging authentication. The kernel configuration required by Waydroid is included; Waydroid remains experimental without end-to-end device acceptance.
-
-## 📮 Follow & Discuss
-
-Progress updates, usage tips and AI discussions (primarily in Chinese) are published here first — issue feedback is welcome.
-
-| WeChat: 熵减矩阵 | Xiaohongshu: yzddmr6 |
+| 公众号：熵减矩阵 | 小红书：yzddmr6 |
 |:---:|:---:|
-| <img src="docs/assets/gzh-qr.png" width="200" alt="WeChat: 熵减矩阵"> | <img src="docs/assets/xhs-qr.jpg" width="200" alt="Xiaohongshu: yzddmr6"> |
-| Updates · Tips · AI talks | Sharing · Feedback |
+| <img src="docs/assets/gzh-qr.png" width="200" alt="公众号：熵减矩阵"> | <img src="docs/assets/xhs-qr.jpg" width="200" alt="小红书：yzddmr6"> |
+| 进展动态 · 使用技巧 · AI 讨论 | 使用分享 · 问题反馈 |
 
-## ⚠️ Read Before Installing
+## ⚠️ 安装前请阅读
 
-This project is only for the **Xiaomi Pad 6 Pro (liuqin, SM8475)**. Other Xiaomi Pad models are not compatible.
+本项目仅适用于 **Xiaomi Pad 6 Pro（liuqin，SM8475）**。其他小米平板型号不适用。
 
-- **Data loss**: unlocking the bootloader and performing an initial installation erase user data. Back up your files first.
-- **Storage and layout**: installation has been tested on one known **256 GB partition layout**, not every 256 GB device. Other capacities and modified partition layouts are unverified and unsupported. The installer repartitions the tail of the disk. In the dual-boot layout both systems boot from slot A; the Linux-only layout places Ubuntu in slot B. Do not bypass the checks.
-- **Validation scope**: installation and initial setup, rotation, touch, the magnetic keyboard (including its touchpad), speakers, single-microphone recording, USB OTG host mode (wired mouse), native fingerprint login and DP output have device-test evidence. See the table below for each feature's scope; not every combination is retested with every release. Android recovery still requires separate device validation.
-- **Installation layout**: the installer offers a Linux-only layout and a dual-boot layout that keeps stock Android. Both systems use slot A and switching writes the other system's image into `boot_a`. The known 256 GB unit has passed slot-A Ubuntu startup, Android's first boot after restoring stock firmware, and a return to Ubuntu through the KernelSU module script under a debug Android boot. The Manager WebUI button, automatic KernelSU activation under an ordinary Android boot, and the Linux-only layout remain unverified. See the [installation steps](docs/INSTALL-TESTING.md).
-- **Recovery preparation**: obtain the matching stock firmware and read the [data and recovery instructions](docs/FLASHING.md#data-and-recovery) before installing.
-- **Hardware limitations**: some features are incomplete. Review the hardware support table below.
+- **这是实验性项目。** 安装会解锁、重分区、清空数据；操作不当可能导致设备无法启动。请按安装指南操作，并保留备份。
+- **数据清除**：解锁 Bootloader 和首次安装会清除用户数据，请提前备份。
+- **只在 256 GB 机型上验证过。** 128 GB 与 512 GB 机型的出厂分区结构相同，安装器同样接受，但未经验证；改过分区的设备不支持安装。安装器会重新划分磁盘尾部，不要绕过校验。
+- **双系统**：双系统布局保留原厂 Android，两个系统都从 A 槽启动，切换时把另一系统的 boot 镜像写入 `boot_a`。不要使用 KernelSU 的“安装到未使用的槽位”，不要再次运行原厂 `flash_all` 脚本，系统更新须冻结；槽位规则见[安装步骤](docs/INSTALL-TESTING.md#双系统切换)。
+- **恢复准备**：安装前请准备对应的原厂固件，并阅读[数据与恢复说明](docs/FLASHING.md#数据与恢复)。
+- **功能限制**：部分硬件功能尚不完整，请先查看下方硬件支持表。
 
-Flashing an incorrect boot image or partition can prevent the tablet from starting. Follow the installation guide and keep your backups.
-Factory calibration and device addresses must come from the same tablet; never copy them between devices.
+出厂校准与设备地址必须来自本机，不可跨设备复制。
 
-## 🚀 Getting Started
+## 🚀 获取与安装
 
-Use a complete installation bundle from [GitHub Releases](https://github.com/yzddmr6/xiaomipad-6pro-mainline/releases). Do not mix files from different versions.
+请从 [GitHub Releases](https://github.com/yzddmr6/xiaomipad-6pro-mainline/releases/latest) 下载同一版本的完整安装包，不要混用不同版本的文件。
 
-| I want to | Read |
+| 我想要 | 入口 |
 |---|---|
-| Install Ubuntu | [Installation guide](docs/FLASHING.md) |
-| Install Fedora Workstation | [Fedora guide](docs/FEDORA.zh-CN.md) (Chinese for now) |
-| Build the kernel and device components | [Build guide](docs/BUILD.md) |
-| Restore Android | [Data and recovery instructions](docs/FLASHING.md#data-and-recovery) |
+| 安装 Ubuntu | [安装指南](docs/FLASHING.md) |
+| 升级已安装的系统 | [升级已安装的系统](docs/INSTALL-TESTING.md#升级已安装的系统) |
+| 自行编译内核和设备组件 | [构建指南](docs/BUILD.md) |
+| 恢复 Android | [数据与恢复说明](docs/FLASHING.md#数据与恢复) |
 
-Prebuilt installation bundles include matching boot and root filesystem images, installation tools and checksums.
-Ubuntu bundles are published on the upstream project's [Releases](https://github.com/yzddmr6/xiaomipad-6pro-mainline/releases) page; the Fedora root filesystem is built locally from the official Fedora aarch64 repositories.
+预编译安装包包括匹配的启动镜像、根文件系统、安装工具与校验文件。
 
-## 🐧 Fedora Workstation (first version)
+## 🐧 Fedora Workstation
 
-Fedora Workstation on the same kernel and device support, built and used on the same reference device as the Ubuntu path (single boot, known 256 GB layout). Treat it as a first version: the desktop is usable, the edges are documented rather than smoothed.
+本仓库是 [yzddmr6/xiaomipad-6pro-mainline](https://github.com/yzddmr6/xiaomipad-6pro-mainline) 的 fork，额外提供 Fedora Workstation 变体。内核、启动镜像、设备层与安装流程和 Ubuntu 路径共用，只有根文件系统与设备层的打包方式不同。
 
-| | |
+Fedora 根文件系统用 `dnf --installroot` 从官方 aarch64 仓库构建，设备层以文件树而非软件包安装；构建与安装说明见 [Fedora 说明](docs/FEDORA.zh-CN.md)（目前为中文）。Fedora 路径按单系统（Linux-only）安装验证。
+
+## 硬件支持
+
+以下为最新发布版本的支持情况。✅ 可用 · 🟡 部分支持 · ❌ 不支持。
+器件信息来自本项目已确认的板级资料和设备树。
+
+功能速览，具体范围见下表：
+
+- ✅ CPU · ✅ GPU 硬件加速 · ✅ 内置存储 · ✅ 120 Hz 显示 · ✅ 触摸 · ✅ 手动亮度
+- ✅ 磁吸键盘与触摸板 · ✅ 原生指纹登录 · ✅ 自动旋转 · ✅ 电源键与音量键
+- ✅ Wi-Fi · ✅ 蓝牙 · ✅ USB 网络与开发者模式 · ✅ USB OTG · ✅ DP 外屏
+- ✅ 四扬声器 · ✅ 单麦克风录音 · ✅ H.264 硬解 · 🟡 后摄 · ✅ 电量显示与充电 · 🟡 待机
+
+### 平台、显示与输入
+
+| 功能 | 器件 / 实现 | 状态 | 说明 |
+|---|---|---|---|
+| SoC / CPU | Qualcomm Snapdragon 8+ Gen 1（SM8475），ARM64 | ✅ 可用 | 主线内核与 Ubuntu 桌面运行 |
+| GPU / 桌面合成 | Adreno 730 / Freedreno / Turnip / Mesa | ✅ 可用 | 桌面合成与应用的 OpenGL ES、Vulkan 硬件加速，使用发行版 Mesa |
+| 内置存储 | UFS / ext4 | ✅ 可用 | 独立的系统分区与 `/home` 分区 |
+| 内置显示 | Novatek NT36532 / 双 DSI / DSC | ✅ 可用 | 2880×1800，120 Hz |
+| 手动亮度 | Kinetic KTZ8866 背光控制 | ✅ 可用 | 背光与手动亮度调节 |
+| 触控 | Novatek NT36532 / SPI（CSOT 或 TM 面板） | ✅ 可用 | 按面板模块自动选择固件；点击、滑动与触控手势 |
+| 磁吸键盘 | Nanosic WN8030 | ✅ 可用 | 普通按键、音量键与触摸板；拆下后重新吸附即可继续输入 |
+| 指纹 | FPC1264 / libfprint TOD / fprintd | ✅ 可用 | 在「设置 → 用户」录入，用于锁屏解锁和开机登录；目前支持第一个账户（UID 1000）的一枚指纹，见[指纹说明](docs/FINGERPRINT.md) |
+| 保护套开合 | GPIO / SW_LID | ✅ 可用 | 用电池时合上保护套会挂起；插着电时只锁屏 |
+
+暂不支持：手写笔。
+
+### 无线与 USB
+
+| 功能 | 器件 / 实现 | 状态 | 说明 |
+|---|---|---|---|
+| Wi-Fi | Qualcomm QCA6490 / ath11k | ✅ 可用 | 2.4 GHz 与 5 GHz 客户端连接 |
+| 蓝牙 | QCA6490 / hci_qca / BlueZ | ✅ 可用 | 配对与日常使用 |
+| USB 设备模式 | Synopsys DWC3 / USB 网络（NCM） | ✅ 可用 | 开发者模式下经 USB 线 SSH 登录，默认关闭 |
+| USB OTG / 主机模式 | USB-C 数据角色切换 / UCSI | ✅ 可用 | 自动切换为主机模式，可接有线鼠标等 USB 输入设备 |
+| USB-C 外接显示 | DisplayPort Alt Mode / FSA4480 | ✅ 可用 | 外接显示器输出画面，拔出后恢复内屏，接回电脑后恢复 USB |
+
+暂不支持：Wi-Fi 热点。
+
+### 音视频与传感器
+
+| 功能 | 器件 / 实现 | 状态 | 说明 |
+|---|---|---|---|
+| 四扬声器 | 4 × Cirrus Logic CS35L41 / AudioReach | ✅ 可用 | 立体声播放与音量控制，使用本机出厂校准 |
+| 内置麦克风 | WCD938x / SoundWire / LPASS / ADSP | ✅ 可用 | 单声道 48 kHz 录音 |
+| H.264 视频硬解 | Qualcomm Iris2 / V4L2 | ✅ 可用 | 通过 V4L2 接口的硬件解码 |
+| 后置摄像头 | S5KJN1 / Qualcomm CAMSS / libcamera 软件图像处理 | 🟡 部分支持 | 「相机」应用可预览、拍照、录像；软件图像处理，无自动对焦，录像不流畅，见[相机](docs/CAMERA.md) |
+| 加速度计 / 自动旋转 | SLPI / SSC / iio-sensor-proxy | ✅ 可用 | 登录界面与桌面随方向自动旋转，装着磁吸键盘时保持横屏 |
+
+暂不支持：前置摄像头、陀螺仪与磁力计、环境光传感器与自动亮度、其他格式的视频硬解、浏览器视频硬解、硬件视频编码。
+
+### 电源与时间
+
+| 功能 | 器件 / 实现 | 状态 | 说明 |
+|---|---|---|---|
+| 电源键 / 音量键 | Qualcomm PMIC / GPIO 输入 | ✅ 可用 | 灭屏、亮屏、电源菜单与音量调节 |
+| 电池状态 / 充电 | qcom_battmgr / UPower | ✅ 可用 | 电量与充电状态显示，墙充充电；充电口过热时由充电固件停止充电。接有线电源时，顶栏显示电池净充电功率和充电通路，菜单里另有充电器输入、电芯电压、电池温度和按当前功率充满的时间，见[快充](docs/FASTCHARGE.md#状态栏) |
+| 快充 | MiPPS / USB PD PPS | ✅ 可用 | 通过小米认证的充电器和第三方 USB PD PPS 充电器默认走高压快充通路。普通 PD 使用固定电压档位。认证失败会自动重试。见[快充](docs/FASTCHARGE.md) |
+| 电脑 USB 供电 | USB 供电路径 | 🟡 部分支持 | 按 500 mA 取电，闲置和挂起时能净充电；高负载时电量仍可能下降 |
+| 关机充电 | 启动阶段充电模式 | 🟡 部分支持 | 显示电量和充电趋势；短按电源键开机，长按 2 秒进入 Fastboot |
+| 待机 | suspend-to-idle | 🟡 部分支持 | 空闲 15 分钟自动挂起，用电池和插在电脑 USB 口时都会睡，插着电脑口睡眠也能净充电；接墙充时保持清醒继续快充；插着电合上保护套只锁屏；被后台事件唤醒后，锁屏且无人操作时很快重新挂起；定时唤醒后正常恢复；待机功耗还未优化 |
+
+暂不支持：休眠到磁盘、硬件时钟写入（启动后联网校时；离线开机时从上次关机时的时间继续）。
+
+## 使用与维护
+
+每天匿名检查一次 GitHub 上的最新版本，有新版时提示；可在通知设置中关闭。
+
+Ubuntu 软件包通过 APT 管理。项目内核与设备组件随安装包整体更新：升级时用新版安装包执行保留 `/home` 的重装，见[升级已安装的系统](docs/INSTALL-TESTING.md#升级已安装的系统)。不要混用不同版本的启动镜像和系统组件。
+
+**开发者模式。** `sudo liuqin-devmode on` 开启经 USB 线的 root SSH 登录，默认关闭，只接受密钥登录；安装时加 `--enable-rescue` 会写入主机的公钥。开启期间平板不会自动挂起。主机上用 `python3 tools/liuqin-devmode-ssh.py root` 连接，用完执行 `sudo liuqin-devmode off`。
+
+如需在 Ubuntu 中运行 Android 应用，可使用 Waydroid；所需内核配置已内置，
+见 [Waydroid 支持](docs/WAYDROID.md)。
+
+充电功率由厂商充电器认证路径协商，见 [快充](docs/FASTCHARGE.md)。
+
+遇到问题时，请提供设备型号、系统版本、复现步骤和相关日志，并通过 GitHub Issues 反馈。
+提交日志前，请移除密码、网络凭据和个人信息。使用交流也可通过顶部的公众号与小红书进行。
+
+## 开发与贡献
+
+| 仓库 | 内容 |
 |---|---|
-| Base | Fedora Workstation 44, GNOME, aarch64, installed with `dnf --installroot` from official repositories only |
-| Boot chain | Identical to the Ubuntu path: same kernel, device trees, boot image assembly, storage admission contract and installer image |
-| Device layer | Installed as a file tree rather than as packages; the admission contract pins file hashes, not a package database |
-| Packages | DNF |
-| Waydroid | Ubuntu path only; not covered here |
+| xiaomipad-6pro-mainline | 设备配置、用户态适配、构建与安装工具、文档 |
+| [linux-sm8450-liuqin](https://github.com/yzddmr6/linux-sm8450-liuqin) | 完整 Linux 内核源码与设备适配提交 |
 
-Tools: [build-liuqin-fedora-rootfs.sh](tools/build-liuqin-fedora-rootfs.sh) for the root filesystem, [build-liuqin-fedora-native-root.sh](tools/build-liuqin-fedora-native-root.sh) for the device layer, preflight and packing, and `build-liuqin-image.py --distro fedora` for the images. The [Fedora guide](docs/FEDORA.zh-CN.md) covers the design, the build and the differences from the Ubuntu path.
+构建使用的内核提交记录在 [kernel/source.json](kernel/source.json)。
+内核分支为 `liuqin-6.17`。欢迎改进驱动、构建工具与文档，提交方式见
+[参与贡献](CONTRIBUTING.md)。
 
-Validated on the reference device: first boot, GDM login, desktop, Wi-Fi, touch, and the boot screens coming up landscape from the first frame (the boot command line declares the panel's mounting, so boot, Plymouth and the greeter no longer flip orientation mid-boot).
+## 致谢与许可证
 
-Not yet validated on Fedora: audio, Bluetooth, the magnetic keyboard, suspend/resume, USB OTG and anything marked partial or unverified in the tables below.
+本项目基于 [sm8450-mainline](https://github.com/sm8450-mainline/linux) 的内核工作，
+并使用 Ubuntu、GNOME、Freedreno 和 Linux Qualcomm 社区的成果。
 
-## Hardware Support
-
-This describes hardware support and known limitations for Xiaomi Pad 6 Pro (liuqin).
-Component identities come from confirmed board information
-and device trees; other batches, capacities and accessory combinations are not implied tested.
-
-✅ Working · 🟡 Partial · ❌ Unsupported · 🧪 Unverified
-
-Verified features at a glance; see the table below for the scope of each:
-
-- ✅ CPU · ✅ GPU desktop acceleration · ✅ Internal storage · ✅ 120 Hz display · ✅ Touch · ✅ Manual brightness
-- ✅ Magnetic keyboard and touchpad · ✅ Native fingerprint login · ✅ Auto-rotation · ✅ Power and volume keys
-- ✅ Wi-Fi · ✅ Bluetooth · ✅ USB data transfer · ✅ USB OTG (wired mouse) · ✅ DP output (tested combination)
-- ✅ Four speakers · ✅ Single-microphone recording · ✅ H.264 hardware decoding (userspace) · ✅ Rear-camera preview (experimental) · ✅ Battery reporting and basic charging
-
-### Platform, Display and Input
-
-| Feature | Component / Implementation | Status | Scope and Limitations |
-|---|---|---|---|
-| SoC / CPU | Qualcomm Snapdragon 8+ Gen 1 (SM8475), ARM64 | ✅ Working | Kernel boot and Ubuntu desktop; not all power states are validated |
-| GPU / compositing | Adreno 730 / Freedreno / Mesa | ✅ Working | Desktop acceleration; some applications need rendering workarounds |
-| Internal storage | UFS / ext4 | ✅ Working | Persistent system and packages on `linux_root` and `linux_home`; installer targets the known 256 GB layout only |
-| Display | Novatek NT36532 / dual DSI / DSC | ✅ Working | 2880 x 1800 at 120 Hz; other refresh rates are not individually tested |
-| Manual brightness | Kinetic KTZ8866 backlight | ✅ Working | Backlight and manual brightness adjustment |
-| Touchscreen | Novatek NT36532 / SPI (CSOT or TM panel) | ✅ Working | Driver selects the firmware by panel module; touch input, swipes and gestures |
-| Magnetic keyboard | Nanosic WN8030 | ✅ Working | Character and volume keys, touchpad, reattachment; suspend recovery not fully covered |
-| Fingerprint | FPC1264 / libfprint TOD / fprintd | ✅ Working | Native Settings enrollment, same-finger acceptance/other-finger rejection, lock-screen unlock and fingerprint login after ordinary reboot; currently limited to the first account (UID 1000) and one finger, see [fingerprint guide](docs/FINGERPRINT.md) |
-| Stylus | NVTCapacitivePen input interface | 🧪 Unverified | Coordinates, pressure, buttons and input after wake not tested |
-| Hall switches | GPIO / SW_LID / SW_TABLET_MODE | 🟡 Partial | Switch states are readable; cover-close and open-to-wake policies not fully validated |
-
-### Wireless and USB
-
-| Feature | Component / Implementation | Status | Scope and Limitations |
-|---|---|---|---|
-| Wi-Fi 2.4 GHz | Qualcomm QCA6490 / ath11k | ✅ Working | Wireless connection and everyday networking |
-| Wi-Fi 5 GHz | QCA6490, supported as WCN6855 family | ✅ Working | 5 GHz connections verified; no peak-throughput claim |
-| Wi-Fi hotspot / AP | NetworkManager / ath11k | 🧪 Unverified | Confirmed networking scope is client mode |
-| Bluetooth | QCA6490 / hci_qca / BlueZ | ✅ Working | Everyday Bluetooth functionality is usable |
-| USB 2.0 device mode | Synopsys DWC3 / NXP eUSB2 repeater | ✅ Working | USB NCM networking and transfer; High-Speed device mode |
-| USB reconnect after charging | USB-C / USB gadget | 🟡 Partial | Since v0.1.1 the UCSI typec controller negotiates automatically; a dedicated retest is pending |
-| USB 3.x SuperSpeed | USB controller / PHY | 🧪 Unverified | Since v0.1.1 the SM8475 PHY tables and controller are in place; SuperSpeed peripheral enumeration untested |
-| USB OTG / host mode | USB-C data-role switching | ✅ Working | Since v0.1.1 UCSI negotiates the role automatically; wired mouse validated, USB drives and docks pending |
-| USB-C external display | DisplayPort Alt Mode / FSA4480 | ✅ Working | External picture, internal-display recovery after unplugging, and USB recovery when reconnected to the computer are verified with the tested monitor/adapter combination; other docks, DP audio and high refresh rates remain unverified |
-
-### Audio, Video and Sensors
-
-| Feature | Component / Implementation | Status | Scope and Limitations |
-|---|---|---|---|
-| Four speakers | 4 × Cirrus Logic CS35L41 / AudioReach | ✅ Working | Stereo playback and volume control with per-device calibration; tuning continues |
-| Internal microphone | WCD938x AMIC1 over SoundWire → LPASS TX macro → ADSP codec DMA | ✅ Working | Mono 48 kHz recording available since v0.3.0 and validated on hardware; the other three mics and noise suppression are not wired yet |
-| H.264 hardware decoding | Qualcomm Iris2 / V4L2 | ✅ Working | Userspace decoding verified; not evidence of browser integration |
-| Other decoding formats | Iris / V4L2 | 🧪 Unverified | HEVC, VP9 and other formats not individually validated |
-| Browser hardware decoding | Browser / V4L2 integration | 🧪 Unverified | Video playback alone does not prove hardware decoding |
-| Hardware encoding | Qualcomm video engine | 🧪 Unverified | Hardware encoding workflows not tested |
-| Rear camera | S5KJN1 / Qualcomm CAMSS / libcamera software ISP | 🟡 Partial | Preview, photos and video in the Camera app; software image processing, no autofocus, video stutters. See [Camera](docs/CAMERA.md) |
-| Front camera | Camera sensor / CAMSS | ❌ Unsupported | Not enabled or validated |
-| Accelerometer / auto-rotation | SLPI / SSC / iio-sensor-proxy | ✅ Working | First boot, login screen, desktop rotation and magnetic-keyboard landscape use |
-| Gyroscope / magnetometer | SSC sensor path | 🧪 Unverified | Application-usable measurements not confirmed by accelerometer support |
-| Ambient light sensor | SSC light-sensor path | 🧪 Unverified | Real light measurements not fully validated |
-| Automatic brightness | Desktop brightness policy | ❌ Unsupported | Automatic brightness control not integrated |
-
-### Power and Time
-
-| Feature | Component / Implementation | Status | Scope and Limitations |
-|---|---|---|---|
-| Power / volume keys | Qualcomm PMIC / GPIO input | ✅ Working | Screen on/off, power menu and volume; native lock-screen authentication verified |
-| Battery / basic charging | qcom_battmgr / UPower | ✅ Working | Capacity reporting, charging state and basic wall charging |
-| Computer USB power | USB power path | 🟡 Partial | Limited supply power; heavy workloads may still discharge the battery |
-| Xiaomi proprietary fast charging | Vendor charging protocol | 🟡 Partial | Charger authentication integrated; battery authentication verified and PD adapters reach 9 V / 2 A. MiPPS and standard PPS fast charging await adapter validation |
-| Charging while powered off | Boot-stage charging hold | 🟡 Partial | No complete charging display; use a long power-key press to boot while charging |
-| Suspend / resume | Linux power management | 🟡 Partial | Basic resume verified; peripheral recovery and deep-sleep power need further testing |
-| RTC / offline time retention | Qualcomm PMK8350 RTC | 🧪 Unverified | Network time synchronization works; offline writes and power-loss retention are not guaranteed |
-
-## Usage and Maintenance
-
-Ubuntu packages are managed through APT and Fedora's through DNF. Update instructions for the project kernel and device components will accompany each installation release.
-Do not mix boot images and system components from different releases.
-
-To run Android applications inside Ubuntu, Waydroid is supported; the required kernel configuration is built in. See [Waydroid support](docs/WAYDROID.md). Waydroid is not covered by the Fedora path.
-
-Charging power is negotiated through the vendor charger authentication path. See [Fast charging](docs/FASTCHARGE.md).
-
-Report problems through GitHub Issues with the device model, system version, reproduction steps and relevant logs.
-Remove passwords, network credentials and personal information before sharing logs.
-The accounts listed above are also available for usage discussions.
-
-## Development and Contributions
-
-| Repository | Contents |
-|---|---|
-| xiaomipad-6pro-mainline | Device configuration, userspace integration, build and installation tools, documentation |
-| [linux-sm8450-liuqin](https://github.com/yzddmr6/linux-sm8450-liuqin) | Complete Linux kernel source and device adaptation commits |
-
-[kernel/source.json](kernel/source.json) records the kernel revision used by the build.
-The device branch is `liuqin-6.17`. Contributions to drivers, tools and documentation are welcome;
-see [CONTRIBUTING.md](CONTRIBUTING.md).
-
-## Acknowledgments and Licensing
-
-This project builds on the kernel work of [sm8450-mainline](https://github.com/sm8450-mainline/linux),
-along with Ubuntu, Fedora, GNOME, Freedreno and the Linux Qualcomm community.
-
-Original project code is MIT-licensed unless a file states otherwise. Linux and third-party components retain their own licenses;
-firmware is subject to its respective owners' terms. See [LICENSE](LICENSE) and [NOTICE](NOTICE).
+除文件另有声明外，项目原创代码采用 MIT 许可证。Linux 内核及第三方组件保留各自许可证；
+固件适用其权利人的授权条款。详见 [LICENSE](LICENSE) 与 [NOTICE](NOTICE)。

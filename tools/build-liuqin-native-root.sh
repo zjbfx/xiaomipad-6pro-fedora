@@ -42,6 +42,10 @@ die() { printf 'build-liuqin-native-root: %s\n' "$*" >&2; exit 1; }
 say() { printf 'build-liuqin-native-root: %s\n' "$*"; }
 
 [ "$(id -u)" = 0 ] || die 'run as root (tree copy, chroot and ownership preservation need it)'
+# The arm64 chroot runs under qemu-user. The default pointer-authentication
+# emulation makes it several times slower; the implementation-defined
+# algorithm keeps the CPU features the guest sees and only speeds it up.
+export QEMU_CPU=max,pauth-impdef=on
 [ -x "$desktop_root/usr/lib/systemd/systemd" ] || die "not an Ubuntu root: $desktop_root"
 [ -f "$desktop_manifest" ] || die "desktop tree manifest is unavailable: $desktop_manifest"
 [ "$(sha256sum "$desktop_manifest" | cut -d' ' -f1)" = "$desktop_manifest_sha256" ] ||
@@ -79,6 +83,30 @@ stage_copy() {
 	say 'copy PASS'
 }
 
+stage_firefox_input() {
+	browser_dir=$project_root/device/firefox
+	browser_deb=$apt_cache/archives/firefox_160.0~build1_arm64.deb
+	browser_hash=d56aac0662a4ec87b5aab1734d9fbd1c24a566ee5153c12199def1563ab7d9b4
+	browser_url=https://packages.mozilla.org/apt/pool/mozilla/firefox_160.0~build1_arm64_54941e6f566d404ddf8ec8ad6f4469a3.deb
+	mkdir -p "$apt_cache/archives"
+	if ! printf '%s  %s\n' "$browser_hash" "$browser_deb" | sha256sum --status -c - 2>/dev/null; then
+		(
+			tmp=$(mktemp "$apt_cache/archives/firefox.XXXXXXXX")
+			trap 'rm -f "$tmp"' EXIT
+			curl --fail --location --output "$tmp" "$browser_url" || exit 1
+			printf '%s  %s\n' "$browser_hash" "$tmp" | sha256sum --check - || exit 1
+			chmod 0644 "$tmp"
+			mv -f "$tmp" "$browser_deb"
+		) || return 1
+	fi
+	install -Dm644 "$browser_dir/mozilla.sources" "$root/etc/apt/sources.list.d/mozilla.sources"
+	install -Dm644 "$browser_dir/mozilla.pref" "$root/etc/apt/preferences.d/mozilla"
+	install -Dm644 "$browser_dir/packages.mozilla.org.asc" "$root/etc/apt/keyrings/packages.mozilla.org.asc"
+	install -Dm644 "$browser_dir/mimeapps.list" "$root/etc/xdg/mimeapps.list"
+	install -Dm644 "$browser_dir/90_liuqin-firefox.gschema.override" \
+		"$root/usr/share/glib-2.0/schemas/90_liuqin-firefox.gschema.override"
+}
+
 stage_debs() {
 	if [ "${LIUQIN_ROOT_MOUNT_NS:-}" != 1 ]; then
 		LIUQIN_ROOT_MOUNT_NS=1 unshare --mount --propagation private sh "$0" debs
@@ -90,9 +118,11 @@ stage_debs() {
 		ls "$debs_dir"/${name}_*_${arch}.deb >/dev/null 2>&1 || die "missing deb: $name ($arch)"
 	done
 	ls "$debs_dir"/liuqin-device_*_arm64.deb >/dev/null 2>&1 || die 'missing deb: liuqin-device'
+	stage_firefox_input
 	say 'installing the liuqin deb set in a qemu-aarch64 chroot'
 	mkdir -p "$root/tmp/liuqin-debs"
 	cp "$debs_dir"/*.deb "$root/tmp/liuqin-debs/"
+	cp "$project_root/tools/lib/root-package-policy.py" "$root/root/liuqin-root-package-policy.py"
 	cp -L /etc/resolv.conf "$root/etc/resolv.conf.test"
 	cat >"$root/root/native-assemble.sh" <<'EOF'
 #!/bin/sh
@@ -105,15 +135,29 @@ cat >/tmp/liuqin-apt.conf <<'APT'
 #clear DPkg::Post-Invoke;
 APT
 apt-get -c /tmp/liuqin-apt.conf update >/dev/null
+python3 /root/liuqin-root-package-policy.py purge
+apt-get -c /tmp/liuqin-apt.conf install -y --allow-downgrades --no-install-recommends \
+    /var/cache/apt/archives/firefox_160.0~build1_arm64.deb
+test "$(dpkg-query -W -f='${Version}' firefox)" = '160.0~build1'
+test -x /usr/lib/firefox/firefox
+glib-compile-schemas --strict /usr/share/glib-2.0/schemas
+test -f /usr/share/applications/firefox.desktop
 # The camera application and its codec plugins are image content, not
 # dependencies of liuqin-device-support: removing Snapshot or a codec must
 # never take the device units with it.  ugly/libav carry the H.264 encoder
 # and decoder that Snapshot recording and in-app playback use; libcamera-tools
-# (cam) and v4l-utils (media-ctl, v4l2-ctl) are the checks docs/CAMERA.md
+# (cam) and v4l-utils (media-ctl, v4l2-ctl) are the checks docs/CAMERA.en.md
 # tells users to run.
 apt-get -c /tmp/liuqin-apt.conf install -y --no-install-recommends libqrtr1 libprotobuf-c1 \
 	gnome-snapshot libcamera-ipa gstreamer1.0-libcamera gstreamer1.0-libav gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly \
-	libcamera-tools v4l-utils >/dev/null
+	libcamera-tools v4l-utils openssh-server fake-hwclock python3-pyudev >/dev/null
+# Only the explicit USB developer-mode socket should listen in a fresh image.
+systemctl disable ssh.service ssh.socket
+# Host keys must be generated per tablet by liuqin-devmode check, never cloned.
+rm -f /etc/ssh/ssh_host_*_key /etc/ssh/ssh_host_*_key.pub
+# The distro unit loads/saves the lower bound, including clean shutdowns.
+systemctl enable fake-hwclock-load.service fake-hwclock-save.service fake-hwclock-save.timer
+fake-hwclock save
 dpkg -i /tmp/liuqin-debs/liuqin-firmware_*_all.deb \
 	/tmp/liuqin-debs/liuqin-device-support_*_arm64.deb \
 	/tmp/liuqin-debs/liuqin-sensors_*_arm64.deb \
@@ -121,6 +165,7 @@ dpkg -i /tmp/liuqin-debs/liuqin-firmware_*_all.deb \
 	$(find /tmp/liuqin-debs -maxdepth 1 -name 'liuqin-fingerprint_*_arm64.deb' -print) \
 	/tmp/liuqin-debs/liuqin-device_*_arm64.deb
 dpkg --audit
+python3 /root/liuqin-root-package-policy.py verify
 for pkg in liuqin-firmware liuqin-device-support liuqin-sensors liuqin-kernel liuqin-device; do
 	dpkg-query -W -f='${Status}\n' "$pkg" | grep -qx 'install ok installed'
 done
@@ -141,7 +186,7 @@ EOF
 	chroot "$root" /bin/sh /root/native-assemble.sh
 	umount "$root/proc" "$root/var/cache/apt/archives" "$root/var/lib/apt/lists"
 	trap - EXIT
-	rm -f "$root/root/native-assemble.sh" "$root/etc/resolv.conf.test" \
+	rm -f "$root/root/liuqin-root-package-policy.py" "$root/root/native-assemble.sh" "$root/etc/resolv.conf.test" \
 		"$root/tmp/liuqin-apt.conf" "$root/usr/sbin/policy-rc.d"
 	rm -rf "$root/tmp/liuqin-debs"
 	# cp -L inside the chroot wrote through the distro resolver symlink into the
@@ -151,6 +196,9 @@ EOF
 	[ -L "$root/etc/resolv.conf" ] &&
 		[ "$(readlink "$root/etc/resolv.conf")" = ../run/systemd/resolve/stub-resolv.conf ] ||
 		die 'etc/resolv.conf is not the distro resolver symlink after the chroot'
+	install -Dm755 "$browser_dir/firefox-snap-remove" "$root/usr/libexec/firefox-snap-remove"
+	install -Dm644 "$browser_dir/liuqin-firefox-snap-remove.service" "$root/usr/lib/systemd/system/liuqin-firefox-snap-remove.service"
+	systemctl --root="$root" enable liuqin-firefox-snap-remove.service
 	say 'debs PASS'
 }
 
@@ -196,15 +244,11 @@ END {
 		[ "$(readlink "$root/etc/systemd/system/$1/$2")" = "../$2" ] || die "unit link failed: $1/$2"
 	}
 	link_unit basic.target.requires liuqin-gnome-storage-guard.service
-	link_unit multi-user.target.wants liuqin-gnome-usb-rescue.service
+	link_unit multi-user.target.wants liuqin-mipps-battery-auth.service
 	link_unit multi-user.target.wants liuqin-slpi.service
 	link_unit multi-user.target.wants liuqin-power-keyd.service
 	link_unit graphical.target.wants liuqin-backlight-default.service
-	# liuqin-hide-gunyah-node.service ships in the deb but stays unwired:
-	# the detect-virt containment is deferred to a later iteration (S2-16,
-	# user decision 2026-09-12).  Wire it with
-	#   link_unit sysinit.target.wants liuqin-hide-gunyah-node.service
-	# when that iteration lands.
+	link_unit sysinit.target.wants liuqin-physical-platform.service
 	# The distro default.target already resolves to graphical.target through
 	# /usr/lib; state it in /etc so a distro default change can never silently
 	# drop the installed system to multi-user.
@@ -248,10 +292,10 @@ END {
 		/usr/lib/systemd/systemd /usr/sbin/gdm3 /usr/bin/gnome-shell \
 		/usr/bin/hexagonrpcd \
 		/usr/local/sbin/liuqin-slpi \
-		/usr/local/bin/busybox /usr/local/bin/liuqin-shell \
+		/usr/local/bin/busybox /usr/sbin/liuqin-devmode \
 		/usr/libexec/iio-sensor-proxy \
 		/usr/local/sbin/liuqin-gnome-storage-guard \
-		/usr/local/sbin/liuqin-gnome-usb-rescue \
+		/usr/libexec/liuqin/devmode-gadget \
 		/usr/local/libexec/liuqin-power-keyd \
 		/usr/local/libexec/liuqin-power-key-action \
 		/usr/local/sbin/liuqin-bt-public-addr \
@@ -264,7 +308,7 @@ END {
 		/etc/liuqin-native-root \
 		/etc/dconf/db/local.d/locks/00-liuqin-power \
 		/etc/systemd/system/liuqin-gnome-storage-guard.service \
-		/etc/systemd/system/liuqin-gnome-usb-rescue.service \
+		/usr/lib/systemd/system/liuqin-devmode.service \
 		/etc/systemd/system/liuqin-power-keyd.service \
 		/etc/systemd/system/bluetooth.service.d/20-liuqin-public-address.conf \
 		/etc/systemd/system/liuqin-bt-preconfigure.service \

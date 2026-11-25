@@ -1,106 +1,135 @@
-# Fast charging
+# 快充
 
-The Xiaomi Pad 6 Pro negotiates its charging power through the ADSP charger
-firmware. The firmware opens the high-voltage charge path only after the adapter
-has passed Xiaomi's private authentication, which the stock system performs from
-userspace. This page describes how the project integrates that authentication and
-how standard USB-PD PPS adapters are handled.
+Xiaomi Pad 6 Pro 的 ADSP 充电固件负责协商电压和电流。双电量计认证通过后，系统按充电器的能力选择通路。
 
-| Path | Condition | Result |
+| 路径 | 条件 | 结果 |
 | --- | --- | --- |
-| MiPPS | Xiaomi adapter passes UVDM authentication | vendor fast charging, up to the adapter's rated power |
-| Standard PPS | any PPS adapter, authentication not passed | 9 V, about 12 W by default; high-voltage path with the switch described below |
-| Plain PD, DCP, SDP | no PPS contract | firmware default |
+| MiPPS | 适配器通过小米 UVDM 握手 | 开放小米高压快充通路 |
+| 标准 PPS | 适配器未通过小米握手，已协商的 PPS 合同就绪 | 默认开放标准 PPS 高压快充通路 |
+| 普通 PD | 固定电压合同 | 使用协商的固定电压档位 |
+| DCP | 常规 USB 充电器 | 固件按电源能力充电 |
+| SDP | 电脑 USB 口 | 按 500 mA 取电 |
 
-## Validation status
+亮屏和熄屏使用同一充电策略。电芯温度保护及充电末段的恒压收尾由充电固件执行。接墙充等有线充电器时系统保持唤醒，熄屏后继续快充；接电脑 USB 口时不保持唤醒，空闲 15 分钟后照常挂起。电脑 USB 口按 500 mA 取电，闲置和挂起时能净充电；整机负载高于输入功率时，电量仍会下降。
 
-The kernel interface and fuel-gauge authentication are verified on the device:
-every attribute of the `xiaomi` group is readable, and both cells authenticate
-successfully. After fuel-gauge authentication, standard PD adapters negotiate
-9 V / 2 A.
+## 验证状态
 
-MiPPS adapter authentication and the standard PPS switch are integrated but not
-yet validated on hardware. They await validation with a MiPPS-capable Xiaomi
-adapter and with a PPS adapter respectively.
+真机上两个电量计均通过认证。普通 PD 适配器曾协商到 9 V / 2 A。
 
-## Components
+**MiPPS 适配器认证已在硬件上验证。** 使用原装小米 67 W MDY-15-EQ（USB-A）适配器与原装
+A-C 线，守护进程完成了真实握手，快充随之生效：
 
-| Path | Role |
+| 读数 | 数值 |
 | --- | --- |
-| `/usr/local/libexec/liuqin-mipps-auth` | authentication daemon (Python, GPL-2.0-only; see `NOTICE`) |
-| `/etc/systemd/system/liuqin-mipps-auth.service` | oneshot unit that runs the daemon |
-| `/etc/systemd/system/liuqin-mipps-auth.service.d/10-allow-unverified-adapter.conf` | enables the standard PPS switch |
-| `/etc/udev/rules.d/90-liuqin-mipps-auth.rules` | starts the unit on Type-C partner attach and USB power online |
+| `adapter_svid` | `0x2717` |
+| `adapter_id` | `0000a661` |
+| `real_type` / `current_state` | `PD_PPS` / `SNK_Ready` |
+| `pd_auth` / `pd_verifed` / `fastchg_mode` | `1` / `1` / `1` |
+| 充电时的数据角色 | `host` |
+| 电池侧功率，56 秒内 12 次采样 | 43.99 – 45.94 W（均值 45.4 W） |
+| 电量 / 电池温度 | 34 – 36 % / 34.0 – 35.5 ℃ |
 
-The daemon talks to the charger firmware through the `xiaomi` attribute group
-that the project kernel exports on the PMIC GLINK power-supply device:
+表中功率由电量计报告的电池电压与净充电电流相乘得出。同一时段，两路电荷泵在约 9 V 下分别报告约 3.0 A 和 2.8 A。固件随温度和电量调整功率。
+
+支持小米协议的酷泰科充电器也以 `adapter_id 0000a819` 通过了同一握手。该充电器没有低电量时的功率读数。
+
+## 组件
+
+| 路径 | 作用 |
+| --- | --- |
+| `/usr/local/libexec/liuqin-mipps-auth` | 认证守护进程（Python，GPL-2.0-only，见 `NOTICE`） |
+| `/etc/systemd/system/liuqin-mipps-auth.service` | 运行认证程序，等待合同就绪并自动重试失败的握手，默认允许标准 PPS |
+| `/etc/systemd/system/liuqin-mipps-battery-auth.service` | 开机时先于适配器认证服务验证两个电量计 |
+| `/etc/udev/rules.d/90-liuqin-mipps-auth.rules` | Type-C 对端接入或 USB 供电上线时启动认证，供电离线时清除放行状态 |
+
+守护进程通过项目内核在 PMIC GLINK 电源设备上导出的 `xiaomi` 属性组与充电固件通信：
 
 ```
 /sys/devices/platform/pmic-glink/pmic_glink.power-supply.0/xiaomi/
 ```
 
-The unit is skipped when that group is absent, so the package installs cleanly
-on kernels without the interface.
+该属性组不存在时单元自动跳过，软件包可在没有此接口的内核上正常安装。
 
-## Authentication sequence
+## 认证流程
 
-On USB power online the daemon performs, in order:
+1. 开机服务通过 `verify_digest` 向两个电量计分别写入随机挑战，核对 HMAC-SHA256 应答并设置 `authentic` 和 `slave_authentic`。适配器认证时会补验尚未通过的电量计。
+2. 等待 PD 合同。服务在 `real_type` 为 `PD` 或 `PD_PPS` 且 `current_state` 为 `SNK_Ready` 时继续。PPS 的 `pdo2` 若仍为零，也会继续等待。最初 8 秒后降低轮询频率，只要同一对端仍在线，晚到的合同也能触发认证。
+3. 对报告小米 SVID 的适配器，先取得 Type-C host 数据角色。角色请求失败时，本次尝试在发送适配器命令前停止；最后一次仍失败时，直接按标准 PPS 放行。
+4. 通过 `request_vdm_cmd` 发送 UVDM 命令 1–3、会话种子（命令 4）和随机挑战（命令 5）。取得适配器 ID 后，按原厂顺序先发 REMOVE_COMPENSATION（命令 7），再发 VERIFIED（命令 6）。原装充电器实测使用这一顺序，跳过了会超时的反向认证命令 8。
+5. 服务记录小米握手结果 `pd_auth`，并用 `pd_verifed` 告知固件是否放行高压通路。固件按电量与温度选择实际充电模式。
 
-1. Fuel-gauge authentication for both cells through `verify_digest`: a random
-   challenge is written, the gauge's HMAC-SHA256 response is read back and
-   compared, and `authentic` / `slave_authentic` are set from the result.
-2. Adapter authentication through `request_vdm_cmd`: the UVDM handshake
-   (commands 1 to 3), a session seed (command 4), a random challenge
-   (command 5), the verdict (commands 6 and 7) and, on success, the reverse
-   authentication response (command 8).
-3. `pd_verifed` is written with the verdict. The firmware then selects the
-   charge profile; `fastchg_mode`, `power_max` and `real_type` report the result.
+握手使用的密钥包含在认证程序中。
 
-The keys used by the handshake are shared across Xiaomi devices and adapters
-and are included in the daemon.
+报告小米 SVID 的适配器同一轮最多尝试三次，两次重试前分别退避 1 秒和 2 秒；其他适配器只探测一次，随后直接按标准 PPS 放行。日志记录失败的步骤和原因。如果固定 PD 合同未能开启高压通路，服务会等待同一连接转为 PPS 后再试。已放行的结果只能在当前连接内复用。
 
-## Standard PPS adapters
+一次完整运行在日志中给出如下序列：
 
-An adapter that is not Xiaomi-branded cannot pass the handshake, so the firmware
-holds the contract at 9 V. With `10-allow-unverified-adapter.conf` installed,
-the daemon asserts `pd_verifed` for such adapters when all of the following hold:
-
-- the negotiated contract is `PD_PPS`;
-- the cable is rated for the current the high-voltage path draws. When the
-  kernel exposes the cable identity, the e-marker must state 5 A. When it does
-  not, the decision relies on the USB-PD rule that a source offers more than
-  3 A only after reading a 5 A e-marker itself.
-
-The decision and its reason are logged as `unverified_adapter=allowed: …` or
-`unverified_adapter=refused: …` in the unit's journal. The desktop notification
-reports the negotiated profile (PPS or PD), not MiPPS.
-
-To keep strictly authentication-gated behaviour, remove the drop-in:
-
-```sh
-sudo rm -r /etc/systemd/system/liuqin-mipps-auth.service.d
-sudo systemctl daemon-reload
+```
+role_request=begin
+role_request=end returncode=0 role=[host] device stderr=
+role_first=proceed
+real_type=PD_PPS
+adapter_svid=0x2717
+adapter_id=0000a661
+adapter_sequence=android:7,6
+pd_auth=1
+fastchg_mode=1
+pd_verifed=1
 ```
 
-## Verifying
+### 数据角色
+
+仅当对端报告小米的 `adapter_svid`（`0x2717`）时，服务才请求 host 角色。其他对端保持已协商的数据角色，服务仍会探测一次小米认证。握手期间会检查连接标识，拔线或更换对端后，旧结果失效。
+
+## 标准 PPS 适配器
+
+服务默认启用 `--allow-unverified-adapter`。第三方适配器即使不应答小米握手，只要双电量计认证通过、PPS 合同仍然就绪，服务就会写入 `pd_verifed=1`，日志中的 `pd_auth=0` 表示此次走标准 PPS。升级会清理旧包附带的 `10-allow-unverified-adapter.conf`。如需仅允许小米认证通路，认证程序支持 `--no-allow-unverified-adapter`。
+
+3 A 线也可使用标准 PPS。对于可拆卸线缆，合规电源接 3 A 线时最多通告 3 A。平板固件在构造 PPS 请求前检查每个可编程电源档位（APDO）的电压范围和最大电流，跳过电压不匹配或请求电流超出上限的档位。
+
+## 状态栏
+
+接有线电源时，GNOME 顶栏显示电池净充电功率和充电通路：MiPPS、PPS、PD、QC 或 USB。菜单里依次是充电器输入（电压、电流和功率，快充时计入两路电荷泵）、电池净功率、电芯电压、电池温度、按当前功率充满所需的时间，以及「保持唤醒以继续快充」：接墙充时为「是」，接电脑口时为「否」。打开菜单底部的「拔线后显示放电功率」，用电池时也显示放电功率。
+
+## 充电记录
+
+`tablet-charge-sample.timer` 在系统清醒时约每分钟采样一次，挂起前和唤醒后也各记一条。持续使用电池时，周期记录只保留断电边界。接电样本包含时间、电量、电池温度、USB 和电池侧电压电流（µV、µA）、电量计数 `charge_counter` 与 `charge_now`（µAh），以及固件模式、认证标志、认证程序对当前对端的结论（`pump.auth` 为 `mipps`、`pps` 或 `null`）、泵侧电压和主副泵电流、请求的热档。电池电流为正表示净充电。连接器温度字段 `pump.connector_temp_decic` 的单位为 0.1 °C，无法读取的测量值记为 `null`。
+
+记录只保存在本机的 `/var/lib/tablet-charge/`（0700）。每行是一条 JSON 记录。`tablet-charge-events.service` 另在接线、拔线和充电类型变化时各记一条。当前文件 `samples.jsonl` 达到约 4 MiB 时轮换，保留最近 8 个旧文件（`samples.1.jsonl` 到 `samples.8.jsonl`），权限均为 0600。运行以下命令可查看一次实时采样，结果只输出到终端。
+
+```sh
+/usr/libexec/tablet-charge-sample --stdout
+```
+
+## 连接器过温保护
+
+USB 供电在线时，内核每秒读取充电口热敏电阻，并将温度传给 ADSP 充电固件。过温阈值和保护动作由原厂充电固件决定。
+
+## 验证
 
 ```sh
 X=/sys/devices/platform/pmic-glink/pmic_glink.power-supply.0/xiaomi
 journalctl -u liuqin-mipps-auth -n 40
-cat "$X/real_type" "$X/pd_verifed" "$X/fastchg_mode" "$X/power_max"
+cat "$X/real_type" "$X/current_state" "$X/pd_verifed" "$X/fastchg_mode"
+cat "$X/bq2597x_bus_voltage" "$X/bq2597x_bus_current" "$X/bq2597x_slave_bus_current"
+cat /sys/class/typec/port0/data_role
 cat /sys/class/power_supply/qcom-battmgr-usb/voltage_now
-cat /sys/class/power_supply/qcom-battmgr-bat/current_now
+B=/sys/class/power_supply/qcom-battmgr-bat
+cat "$B/voltage_now" "$B/current_now" "$B/capacity" "$B/temp"
 ```
 
-The firmware limits the charge profile by state of charge and temperature.
-Fast charging is observable between roughly 5 % and 70 % state of charge; above
-90 % the firmware selects the standard profile regardless of authentication.
+电荷泵工作期间 `/sys/class/power_supply/qcom-battmgr-usb/current_now` 可能为 0，判断充电
+通路的电流要看电池侧功率与 `bq2597x_bus_*` 属性。
 
-## Troubleshooting
+可将电池的 `voltage_now × current_now` 除以 10¹² 得到净充电功率（W）。结合电量、温度和泵侧读数观察高电量时的降流和恒压收尾。
 
-| Symptom | Check |
+## 排障
+
+| 现象或日志 | 检查 |
 | --- | --- |
-| Unit never runs | the `xiaomi` group is missing: the running kernel predates the interface |
-| `pd_verifed` stays 0 with a Xiaomi adapter | `journalctl -u liuqin-mipps-auth`: `adapter auth mismatch` means the handshake failed; `pdo2 reports no source PDO` means the adapter offered no PD contract |
-| `pd_verifed` is 1 but `fastchg_mode` is 0 | state of charge above 90 %, battery temperature outside the fast-charge window, or the adapter offers no PPS APDO |
-| `unverified_adapter=refused` | the reason follows: cable rated below 5 A, or the contract is not PD_PPS |
+| 插电后服务没有启动 | 查看 USB 电源的 `online`、Type-C 对端和 `xiaomi/request_vdm_cmd` 节点。缺少该节点时 systemd 会跳过服务。 |
+| `role_first=waiting` | 查看同一行的 `real_type`、`current_state` 和 `pdo_pending`。协商未完成时服务会继续等待，固定 PD 尝试结束后也可能在等待 PPS。 |
+| `auth_attempt=…/3 failed` | 查看同次尝试的错误。若为 `host role request failed`，核对 `data_role` 和 `role_request=end`；若为电量计验证失败，核对 `authentic` 和 `slave_authentic`。 |
+| `role_first=skipped_non_xiaomi` | 对端未报告小米 SVID，服务保留数据角色。查看后续的 `pd_auth` 和 `unverified_adapter`，确认选用的通路。 |
+| `unverified_adapter=refused` | 核对 `real_type=PD_PPS`、`current_state=SNK_Ready`，并检查 `pdo2` 是否仍为零。 |
+| `pd_verifed=1`，但 `fastchg_mode=0` | 前者表示高压通路已放行。对照电量、电池温度和泵侧电流，确认固件此时是否启用快充。 |

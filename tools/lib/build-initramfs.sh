@@ -459,6 +459,20 @@ mkdir -p "$staging/bin" "$staging/sbin" "$staging/etc" "$staging/proc" \
 	"$staging/usr/sbin"
 cp "$busybox" "$staging/bin/busybox"
 cp "$source_dir/init" "$staging/init"
+# Persistent roots need the distro checker before their first writable mount.
+# UBUNTU_DESKTOP_ROOT is already a fixed input of build-liuqin-image.py.
+if [ "$storage_mode" = persistent ]; then
+	fsck_root=${ROOT_FSCK_ROOT:-${UBUNTU_DESKTOP_ROOT:-}}
+	[ -n "$fsck_root" ] || { echo 'set ROOT_FSCK_ROOT to the verified Ubuntu ARM64 root' >&2; exit 1; }
+	set --
+	[ "$charger_mode" != 1 ] || set -- --library libdrm.so.2
+	python3 "$project_root/tools/lib/build-root-fsck.py" --root "$fsck_root" --out "$staging/fsck-runtime" "$@"
+	cp "$staging/fsck-runtime/root-fsck-files.json" "$out_dir/root-fsck-files.json"
+	cp -a "$staging/fsck-runtime"/. "$staging"/
+	rm -rf "$staging/fsck-runtime" "$staging/root-fsck-files.json"
+	install -m 0755 "$source_dir/root-fsck" "$staging/bin/root-fsck"
+fi
+install -m 0755 "$project_root/device/platform/liuqin-physical-platform" "$staging/bin/liuqin-physical-platform"
 cp "$source_dir/etc/issue" "$staging/etc/issue"
 cp "$source_dir/etc/mdev.conf" "$staging/etc/mdev.conf"
 chmod 0644 "$staging/etc/mdev.conf"
@@ -497,10 +511,20 @@ if [ "$storage_mode" = persistent ]; then
 	fi
 fi
 if [ "$charger_mode" = 1 ]; then
+	# No module loader or persistent root is available in charger mode. The
+	# enabled DP component also gates the shared DSI DRM master through FSA4480.
+	charger_config=${KERNEL_OUT:?set KERNEL_OUT for the charging runtime}/.config
+	sh "$project_root/tools/lib/check-charger-roots.sh" "$charger_config"
 	printf '%s\n' hold-v1 >"$staging/etc/liuqin-charger-mode"
 	chmod 0644 "$staging/etc/liuqin-charger-mode"
+	python3 "$project_root/tools/lib/build-charger-runtime.py" --root "$fsck_root" --kernel "$KERNEL_OUT" --out "$staging"
+	mkdir -p "$staging/usr/local/libexec"
+	install -Dm755 "$project_root/device/gnome-overlay/usr/local/libexec/liuqin-mipps-auth" "$staging/usr/local/libexec/liuqin-mipps-auth"
+	install -Dm755 "$project_root/device/charger-mode/liuqin-charger-auth" "$staging/bin/liuqin-charger-auth"
 	cp "$charger_mode_source" "$staging/bin/liuqin-charger-mode"
 	chmod 0755 "$staging/bin/liuqin-charger-mode"
+	cp "$project_root/device/charger-mode/liuqin-charger-usb" "$staging/bin/liuqin-charger-usb"
+	chmod 0755 "$staging/bin/liuqin-charger-usb"
 	for charger_helper in key exit; do
 		case $charger_helper in
 		key) charger_source=$charger_key_source; charger_output=liuqin-charger-mode-power-key ;;
@@ -516,6 +540,23 @@ if [ "$charger_mode" = 1 ]; then
 			exit 1
 		fi
 	done
+	# The distro DRM ABI and runtime are bundled from the same pinned ARM64
+	# root as e2fsck. The status renderer owns a standard dumb-buffer scanout.
+	[ -n "${fsck_root:-}" ] || { echo 'charger display requires the fixed Ubuntu root' >&2; exit 1; }
+	"$slot_success_gcc" -Os -s -Wall -Wextra -Werror -I/usr/include/libdrm \
+		"$project_root/device/charger-mode/liuqin-charger-screen.c" \
+		"$fsck_root/usr/lib/aarch64-linux-gnu/libdrm.so.2" \
+		-Wl,-rpath-link,"$fsck_root/usr/lib/aarch64-linux-gnu" \
+		-o "$staging/bin/liuqin-charger-screen"
+	readelf -h "$staging/bin/liuqin-charger-screen" | grep -q 'Machine:.*AArch64' || exit 1
+fi
+
+# Use the installer's existing RESTART2 helper for product recovery too.
+if [ -x "$staging/bin/liuqin-charger-mode-exit" ]; then
+	ln -s liuqin-charger-mode-exit "$staging/bin/liuqin-reboot"
+else
+	"$slot_success_gcc" -static -Os -s -Wall -Wextra -Werror \
+		"$charger_exit_source" -o "$staging/bin/liuqin-reboot"
 fi
 
 mkdir -p "$staging/lib/firmware/novatek/liuqin"
@@ -589,7 +630,7 @@ fi
 # dispatches applets it cannot find in PATH. That is a property of one vendor's
 # build, not of BusyBox, and nothing outside `sh` gets it -- so link every applet
 # the init script names.
-for applet in basename blockdev cat chmod chroot cp cttyhack cut dmesg findfs \
+for applet in awk grep od tr basename blockdev cat chmod chroot cp cttyhack cut dmesg findfs \
 	hostname ip kill killall ln losetup ls mkdir mount poweroff readlink reboot \
 	setsid sh sha256sum sleep stat switch_root sync telnetd udhcpd umount; do
 	ln -s busybox "$staging/bin/$applet"
@@ -602,6 +643,9 @@ if [ -n "${INSTALLER_RUNTIME:-}" ]; then
 		{ echo 'installer runtime is incomplete' >&2; exit 1; }
 	cp -a "$INSTALLER_RUNTIME"/. "$staging"/
 	mkdir -p "$staging/usr/lib/liuqin"
+	cp "$project_root/tools/lib/install-preflight.sh" "$staging/usr/lib/liuqin/install-preflight.sh"
+	cp "$project_root/tools/lib/install-devmode.sh" "$staging/usr/lib/liuqin/install-devmode.sh"
+	cp "$project_root/tools/lib/install-keep-home.sh" "$project_root/tools/lib/install-keep-home.awk" "$staging/usr/lib/liuqin/"
 	cp "$project_root/tools/lib/install-root.sh" "$staging/usr/lib/liuqin/install-root.sh"
 	cp "$project_root/tools/lib/install-layout.sh" "$staging/usr/lib/liuqin/install-layout.sh"
 	cp "$project_root/tools/lib/install-switch-store.sh" "$staging/usr/lib/liuqin/install-switch-store.sh"
