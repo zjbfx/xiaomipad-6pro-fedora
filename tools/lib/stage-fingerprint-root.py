@@ -21,9 +21,9 @@ never touches the host's enrollment state is inherited rather than re-establishe
 What the deb cannot carry is the libfprint TOD ABI library, because on Ubuntu it
 is somebody else's package.  Fedora publishes no such package, so the port
 builds it (tools/build-liuqin-fedora-libfprint-tod.sh) and it arrives here as a
-tar to be unpacked into the same root.  Everything else -- including the kernel
-module at kernel/fpc1264_spi_diag.ko, which stable_module.py loads by the path
-relative to its own directory -- is inside the payload already.
+tar to be unpacked into the same root.  The bundle's own kernel module is
+verification input only: prepare_payload removes it, and the installed system
+modprobes the fpc1264_spi_diag module of the running kernel.
 """
 import argparse
 import importlib.util
@@ -102,10 +102,6 @@ def main() -> None:
                         help="the Fedora root being assembled")
     parser.add_argument("--version", required=True,
                         help="the release version the candidate metadata records")
-    parser.add_argument("--kernel-release-file", type=Path,
-                        help="the root's own record of the kernel it carries, "
-                             "e.g. usr/share/liuqin/kernel.release; when given, "
-                             "the candidate's kernel_release must equal it")
     args = parser.parse_args()
 
     for path in (args.bundle, args.tod_tar):
@@ -116,35 +112,11 @@ def main() -> None:
 
     module = load_deb_builder(Path(__file__).resolve().parents[1])
 
-    # The one pairing this layer does not tolerate being wrong.  The module in
-    # the bundle is vermagic-pinned to a single kernel release and
-    # stable_module.py compares that release against the running kernel before
-    # it insmods anything, so a root built from a different kernel commit
-    # installs cleanly and then fails at the first login with nothing in the
-    # journal to explain it.  Checking it before anything is staged means the
-    # message can name both releases instead, and it leaves no half-installed
-    # tree behind.
-    #
-    # This is a Fedora-path check rather than a shared one because it is a
-    # property of how the root is assembled: the Ubuntu builder installs the
-    # kernel from a package whose version the deb already depends on, while a
-    # Fedora root is handed whatever kernel tree the caller built.
-    if args.kernel_release_file is not None:
-        if not args.kernel_release_file.is_file():
-            raise SystemExit(
-                f"the root does not record a kernel release at {args.kernel_release_file}")
-        carried = args.kernel_release_file.read_text().strip()
-        # prepare_payload refuses any bundle whose CANDIDATE.json disagrees with
-        # this constant, so it is the release the module is pinned to whichever
-        # bundle is passed; reading it here rather than from the archive keeps
-        # the check ahead of the staging it guards.
-        pinned = module.KERNEL_RELEASE
-        if carried != pinned:
-            raise SystemExit(
-                f"the fingerprint module is built for kernel {pinned} but this root "
-                f"carries {carried or '(nothing recorded)'}; build the kernel at the "
-                "commit the release pins (fe81794b5e1b) or install without the layer")
-
+    # The v0.6.0 bundle's own CANDIDATE.json still names the kernel it was
+    # validated on, and prepare_payload keeps that provenance check.  The module
+    # itself is no longer installed from the bundle -- stable_module.py loads the
+    # in-tree fpc1264_spi_diag module of the running kernel -- so this layer no
+    # longer has to agree with the root's kernel record.
     with tempfile.TemporaryDirectory(prefix="liuqin-fingerprint-root-") as temporary:
         payload = Path(temporary) / "payload"
         payload.mkdir()
@@ -188,8 +160,8 @@ def main() -> None:
     print(json.dumps({
         "fingerprint_files": len(manifest),
         "candidate": info["id"],
-        "kernel_release": info["kernel_release"],
-        "kernel_module_sha256": info["kernel_module_sha256"],
+        "validated_kernel_release": info["validated_kernel_release"],
+        "kernel_module": info["kernel_module"],
         "libfprint_libraries": libraries,
     }, indent=2))
 

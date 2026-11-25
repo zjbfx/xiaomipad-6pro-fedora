@@ -1,6 +1,6 @@
 # Fedora 支持（第一版）
 
-[Xiaomi Pad 6 Pro (liuqin)](../README.zh-CN.md) 的 Fedora Workstation 移植。
+[Xiaomi Pad 6 Pro (liuqin)](../README.md) 的 Fedora Workstation 移植。
 
 > **状态：第一版，真机日常可用。** 首次安装、首启、GDM 登录、桌面、Wi-Fi、触摸，以及"开机画面
 > 从第一帧就是横屏"已验收；声音、蓝牙、磁吸键盘、挂起恢复、USB OTG 尚未逐项验收。首启一路踩到的
@@ -8,7 +8,7 @@
 > preflight 里修掉并前移（见下）。已知未解决：自动旋转指错方向（见 README 的加速度计一行）。
 > 本文说明能做什么、还差什么、以及为什么这样切分。本文暂时只有中文；英文版随移植完成一起补。
 
-已通过的构建结果（Fedora 44 x86_64 主机、aarch64 交叉构建）：
+首次移植（v0.6.0）的构建结果（Fedora 44 x86_64 主机、aarch64 交叉构建）；v0.8.0 的数字在本次重建后更新：
 
 | 检查 | 结果 |
 |---|---|
@@ -43,9 +43,9 @@ Firefox、LibreOffice、文档与图片查看器…），再叠加本项目的�
 
 **镜像必须与内核同版本，不能随手拿一份旧的。** `install.py` 把 RAM 安装器引导起来后的第一件事
 就是比对它的 `uname -r` 和 bundle 记录的 `kernel_release`，不一致立刻中止 —— 此时还没动任何
-分区，但这一趟也就白跑了。v0.2.0 的 `installer.img` 内核是 `6.17.0-rc1-gb07784536640`，配
-v0.6.0 内核的包会被直接拒。取**同一份发布版**里的 `installer.img`
-（v0.6.0：`80c64d5a4f7d15ba4b260a41bc3b55dbc03b2b81dafdc42554f50488595e984a`，与发布版
+分区，但这一趟也就白跑了。v0.6.0 的 `installer.img` 内核是 `6.17.0-rc1-gfe81794b5e1b`，配
+v0.8.0 内核的包会被直接拒。取**同一份发布版**里的 `installer.img`
+（v0.8.0：`47c1c566712e55888efc0104cf1a02588a30e7ff28baeec98f317b09b76ce60c`，与发布版
 `SHA256SUMS` 一致），这就是 `INSTALLER_IMG` 要指的文件。
 
 发布的 `installer.img` 里内嵌着**它自己那一版**的安装脚本和根契约。这两样都不是发行版中立的：
@@ -57,7 +57,7 @@ v0.6.0 内核的包会被直接拒。取**同一份发布版**里的 `installer.
 | bundle 里的文件 | 作用 | 覆盖掉镜像里的 |
 |---|---|---|
 | `install-root.sh` | 安装脚本 | 无条件的 snap-confine `getcap` 检查（Fedora 无 snapd） |
-| `native-root.contract` | 根契约（41 个 pin） | Ubuntu 时代的契约，与 Fedora 根有 5 个 pin 不同 |
+| `native-root.contract` | 根契约（47 个 pin） | Ubuntu 时代的契约，哈希与 Fedora 根不同 |
 
 镜像本身一个字节都不改（哈希与发布版一致），发行版差异全部留在可审计的仓库文件里。
 **v2 项**：与其覆盖，不如按本仓库的树自己构建 `installer.img`（需要 Ubuntu 根来产出 installer runtime）。
@@ -217,7 +217,7 @@ sudo dnf install -y qemu-user-static gcc-aarch64-linux-gnu dtc ccache \
 - `STOCK_OVERLAY_DIR` / `STOCK_BASE_DIR`：DTBO 条目与 vendor_boot DTB
 - `AUDIO_TOPOLOGY`：AudioReach 拓扑。**不要**用旧发布版里那份：上游为板载话筒采集链
   重建过拓扑，initramfs 构建器和固件准备脚本现在都按新哈希（`9c9f8bfc…`）把关，旧文件
-  会被直接拒掉（报 `AudioReach topology identity mismatch`）；按下面第 3 步从 v0.6.0 的
+  会被直接拒掉（报 `AudioReach topology identity mismatch`）；按下面第 3 步从 v0.8.0 的
   `boot.img` 里恢复
 - `WLAN_HSP2_TUPLE`：准备好的 WLAN 固件组合
 - `SENSOR_STACK_TAR`：见下方"还差什么"
@@ -232,21 +232,23 @@ sudo dnf install -y qemu-user-static gcc-aarch64-linux-gnu dtc ccache \
 
 ```sh
 # 1. Fedora 根（在本机交叉构建 aarch64，不需要 aarch64 硬件）
-sudo OUT_DIR="$PWD/out/fedora-rootfs" sh tools/build-liuqin-fedora-rootfs.sh all
+#    发行版固定在 Fedora 44（GNOME 50，两个 shell 扩展声明的版本）；
+#    脚本默认就是 44，显式写上以免被主机的 release 带走。
+sudo FEDORA_RELEASE=44 OUT_DIR="$PWD/out/fedora-rootfs" sh tools/build-liuqin-fedora-rootfs.sh all
 
 # 2. 内核层（复用已发布内核，不再重新编译）
-#    这里的版本号是硬约束：必须用 v0.6.0。指纹模块按 vermagic 钉在
-#    6.17.0-rc1-gfe81794b5e1b，只有 v0.6.0 的 bundle.json 记录这个 commit，
-#    kernel/source.json 也钉的是它；换成别的发布版会得到另一个 kernelrelease，
-#    指纹层铺进去时会被内核版本交叉检查拦下（见「内核版本这一条是硬约束」）。
-RELEASE_DIR=~/project/miPad6pro/liuqin-v0.6.0 sh tools/import-liuqin-release-kernel.sh
+#    这里的版本号是硬约束：必须用 v0.8.0（内核提交 c25f056e0c20，
+#    kernel release 6.17.0-rc1-liuqin-next20261112b-gc25f056e0c20）。
+#    指纹运行时从这棵树里 modprobe 树内的 fpc1264_spi_diag 模块，
+#    不再加载 v0.6.0 bundle 自带的 .ko（见「指纹层」）。
+RELEASE_DIR=~/project/miPad6pro/liuqin-v0.8.0 sh tools/import-liuqin-release-kernel.sh
 #    产出 out/kernel-from-release/：Image、模块树、DTB、build-info.json、SHA256SUMS
 
 # 3. AudioReach 拓扑（上游为话筒采集链重建过它，v0.2.0 那份已经过期）
 #    上游的常规做法是用 tools/build-liuqin-audio-topology.sh 从 AudioReach 源码重编，
 #    需要 alsatplg 和一个钉在 2af1f1e 的 linux-msm/audioreach-topology 检出；
 #    不编 AudioReach 的机器上，从发布包恢复等价的一份：
-RELEASE_DIR=~/project/miPad6pro/liuqin-v0.6.0 sh tools/import-liuqin-release-topology.sh
+RELEASE_DIR=~/project/miPad6pro/liuqin-v0.8.0 sh tools/import-liuqin-release-topology.sh
 #    产出 out/topology-from-release/：拓扑本体、topology.identity、SHA256SUMS
 #    脚本自己核对两个构建器里的哈希字面量，对不上就退出；这就是输入清单里的
 #    AUDIO_TOPOLOGY（注意不是 out/from-release-firmware/topology/ 里那份）
@@ -291,18 +293,20 @@ true，但没有 tod 源码的树里它无事可做）。
 （`tod-shared-loader.c`），项目那份 drop-in 已经指向
 `/usr/local/lib/liuqin-fpc-oem/tod`。
 
-### 内核版本这一条是硬约束
+### 指纹层与内核版本
 
-指纹模块是按 **单个内核 release** 钉死的（vermagic），`stable_module.py` 在 `insmod`
-之前会拿运行中的内核版本比对，而随包发布的二进制只在提交 `fe81794b5e1b` 上编译过。
-`fingerprint` 阶段会把这个记录和根里的 `usr/share/liuqin/kernel.release` 对比，
-不一致就拒绝装配并同时打印两个版本号 —— 这一步放在任何落盘之前，所以拒绝之后不会留下
-半装的树。
+v0.8.0 改了这里的语义：`prepare_payload` 仍然校验公开 bundle 的候选元数据（候选记录的
+`validated_kernel_release` 是 `6.17.0-rc1-gfe81794b5e1b`）和包内模块的 vermagic，但随后
+**删掉 bundle 自带的 `.ko`**；候选元数据改记 `validated_kernel_release` / `kernel_module`，
+运行时由 `stable_module.py` 在系统启动时 modprobe **运行内核树内**的 `fpc1264_spi_diag`。
+因此旧版那条"Fedora 根必须编译在 `fe81794b5e1b`"的硬约束已经消失，新的约束是：
 
-后果：**Fedora 根的内核必须编译在 `fe81794b5e1b`**（也就是 `liuqin-6.17` 分支上的那个
-提交），不能用 `liuqin-quiet-bootargs` 分支的顶端（`3fabcf1aa32c`）—— 后者的 vermagic 是
-`6.17.0-rc1-g3fabcf1aa32c`，装上去会在第一次登录时静默失败。要同时要安静启动参数，就
-把那个提交 rebase 到 `fe81794b5e1b` 之上再编译。
+- 根里的内核必须是 v0.8.0 的 `c25f056e0c20`（release `6.17.0-rc1-liuqin-next20261112b-gc25f056e0c20`）；
+- 这棵模块树里要有 `fpc1264_spi_diag`（`import-liuqin-release-kernel.sh` 导入后可直接检查）；
+- 公开的 `fingerprint-build-inputs.tar.gz` 仍是 v0.6.0 那份，作为校验输入使用，并不要求根内核与它一致。
+
+`fingerprint` 阶段不再和根里的 `usr/share/liuqin/kernel.release` 做逐字比对；bundle 自身
+的摘要/候选校验仍在，校验失败会在任何落盘之前拒绝装配。
 
 产物在 `out/image/bundle/`：`boot.img`、复用的 `installer.img`、`rootfs.tar.gz`、`install.py` 与清单文件。
 
@@ -314,7 +318,7 @@ true，但没有 tod 源码的树里它无事可做）。
 
 ```sh
 sh tools/build-liuqin-fedora-rootfs.sh preflight    # 发行版侧：gdm、符号链接、systemd 可执行
-sh tools/build-liuqin-fedora-native-root.sh preflight  # 设备层侧：14 个 0755 + 15 个 0644 + 拓扑链接
+sh tools/build-liuqin-fedora-native-root.sh preflight  # 设备层侧：18 个 0755 + 32 个 0644 + 拓扑/单元链接
 sh tests/persistent-root.sh                          # 准入机制的 fail-closed 测试
 ```
 
@@ -322,12 +326,15 @@ sh tests/persistent-root.sh                          # 准入机制的 fail-clos
 
 ## 真机安装
 
-与 Ubuntu 版流程相同，外加两个**必须做**的手工步骤（发布包与 ABL 的已知问题）：
+与 Ubuntu 版流程相同，外加一个**必须做**的手工步骤（发布包与 ABL 的已知问题）：
 
 1. **关闭 vbmeta 校验**（否则 ABL 拒绝启动未签名的 boot 镜像，开机直接跳 fastboot）
-2. **启用 `liuqin-hide-gunyah-node.service`**（否则 `systemd-detect-virt` 报 `vm-other`，GSD 走 VM 路径导致电源键立即关机）
 
-详见 [安装步骤](INSTALL-TESTING.zh-CN.md) 与 [安装指南](FLASHING.zh-CN.md)。
+v0.8.0 起，`liuqin-hide-gunyah-node.service` 已被 `liuqin-physical-platform.service` 取代：
+装配器把它链进 `sysinit.target.wants`，开机时自动校验 `systemd-detect-virt --vm` 为 `none`
+且 `CHASSIS=tablet`；校验失败会停在救援 shell，而不是带着错误的虚拟机身份进桌面。
+
+详见 [安装步骤](INSTALL-TESTING.md) 与 [安装指南](FLASHING.md)。
 
 ## 还差什么
 
@@ -360,13 +367,25 @@ sh tests/persistent-root.sh                          # 准入机制的 fail-clos
    那种情况），所以只是 Ubuntu 形状的死代码，v2 从设备层删掉即可。
 5. **指纹层（已移植，比 Ubuntu 多一步）** —— 设备层文件与 Ubuntu 完全同源：`fingerprint`
    阶段调用的是 `.deb` 构建器自己的 `read_bundle` / `prepare_payload` / `stage_root`
-   三个函数（`tools/lib/stage-fingerprint-root.py`），包装壳去掉，校验一行没少。
-   多出来的是 `libfprint-2-tod.so.1`（Fedora 不提供，见上文"指纹层"一节）和一条内核版本
-   硬约束。这两个发行版共用的另外两件事也要在位：Fedora 根里的
+   三个函数（`tools/lib/stage-fingerprint-root.py`），包装壳去掉，bundle 校验一行没少。
+   多出来的是 `libfprint-2-tod.so.1`（Fedora 不提供，见上文"指纹层"一节）；v0.8.0 的
+   运行时改用运行内核树内的 `fpc1264_spi_diag`，不再要求根内核与 v0.6.0 bundle 的
+   vermagic 一致。两个发行版共用的另外两件事也要在位：Fedora 根里的
    `/usr/lib/systemd/system/fprintd.service` 与 `/usr/lib64/security/pam_fprintd.so`
    （分别来自 `fprintd` 和 `fprintd-pam` 包），根构建阶段会断言它们存在 —— 缺前者时项目
    的 drop-in 落进一个空目录，systemd 读作"根本没有这个单元"；缺后者时 GDM 静默退回密码
    登录，日志里什么都不留。这两个都是**安静失败**，所以在这里断言而不是留给设备层。
+6. **时钟下限（fake-hwclock，明确豁免）** —— ⬜ Fedora 官方源没有 `fake-hwclock`
+   （只有 COPR，且不覆盖 aarch64）。设备层里那份 `fake-hwclock-load.service.d` drop-in
+   与 `liuqin-clock-floor` 在 Fedora 根里不会生效。PMIC RTC 掉电后回到 1970，首启在
+   NTP 同步前依赖 chrony 的 `nocerttimecheck 1`（已随 overlay 安装）完成首次校时；
+   v0.6.0 的真机一直就是这个行为。`tests/clock-floor.py` 因此对 Fedora 豁免，
+   Fedora 原生实现留作 v2。
+7. **发布通知器（Fedora 上停用）** —— ⬜ `mainline-release-notifier` 用
+   `dpkg --validate-version` / `--compare-versions` 做版本比较，Fedora 根没有 dpkg。
+   装配器仍安装这棵树与 `/usr/share/mainline-release/version`（发布身份），但**不**把
+   用户定时器链进 `timers.target.wants`；preflight 断言它未启用，避免桌面里有一个每次
+   运行都失败的定时任务。要恢复通知，可在根里加 `dpkg` 包，或改成 rpm 版本比较。
 
 准入门禁要求的 `/usr/libexec/iio-sensor-proxy` 和 `/usr/bin/hexagonrpcd` 由第 1 项提供；
 在它验证通过之前，Fedora 装配器产出的根会被准入拒绝 —— 这是刻意的：宁可在主机上失败。

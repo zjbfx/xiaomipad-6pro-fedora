@@ -24,8 +24,10 @@ need_sshd() {
 
 # The system OpenSSH listens on every address; then the developer-mode
 # socket, which listens only on the USB address, cannot bind port 22.
+# Debian/Ubuntu name the units ssh.*, Fedora openssh-server names them sshd.*.
 system_ssh_active() {
-	systemctl -q is-active ssh.socket || systemctl -q is-active ssh.service
+	systemctl -q is-active ssh.socket || systemctl -q is-active ssh.service ||
+		systemctl -q is-active sshd.socket || systemctl -q is-active sshd.service
 }
 
 status() {
@@ -57,7 +59,7 @@ status() {
 	echo "SSH socket: $(systemctl is-active liuqin-devmode-ssh.socket 2>/dev/null || true) ($LIUQIN_DEVICE_IP port 22)"
 	echo "host: ssh <user>@$LIUQIN_DEVICE_IP (the host side gets $LIUQIN_HOST_IP by DHCP)"
 	if system_ssh_active; then
-		echo 'warning: ssh.socket or ssh.service is active and listens on every address, so the USB-only socket cannot bind; to keep SSH on the USB link only: systemctl disable --now ssh.socket ssh.service'
+		echo 'warning: a system SSH unit (ssh.* on Debian/Ubuntu, sshd.* on Fedora) is active and listens on every address, so the USB-only socket cannot bind; to keep SSH on the USB link only, disable that pair (e.g. systemctl disable --now sshd.socket sshd.service)'
 	fi
 }
 

@@ -67,7 +67,11 @@ sensor_stack_tar=${SENSOR_STACK_TAR:?"set SENSOR_STACK_TAR to the built sensor s
 # deliberate omission.
 fingerprint_bundle=${FINGERPRINT_BUNDLE:?"set FINGERPRINT_BUNDLE to the released fingerprint-build-inputs.tar.gz"}
 libfprint_tod_tar=${LIBFPRINT_TOD_TAR:?"set LIBFPRINT_TOD_TAR to the built libfprint TOD archive"}
-fingerprint_version=${LIUQIN_FINGERPRINT_VERSION:-0.6.0}
+release_version=$(cat "$project_root/VERSION")
+case $release_version in
+'' | *[!0-9A-Za-z._-]*) release_version=0.8.0 ;;
+esac
+fingerprint_version=${LIUQIN_FINGERPRINT_VERSION:-$release_version}
 power_settings_binary=${POWER_SETTINGS_BINARY:-}
 power_key_cc=${POWER_KEY_CC:-${CROSS_COMPILE:-aarch64-linux-gnu-}gcc}
 # The three device helpers are the project's own C, compiled here exactly as the
@@ -248,6 +252,57 @@ stage_device() {
 			mkdir -p "$root/$(dirname "$entry")"
 			cp -a "$overlay/$entry" "$root/$entry"
 		done
+
+	# The shared charging policy: the logind drop-in, the sampler, the event
+	# recorder, the idle rescue and the shell indicator.  It is a separate
+	# project-owned tree, shared with the other tablet ports, so it is copied
+	# the same way the Ubuntu package copies it -- with normalised modes, and
+	# with a collision check so neither tree can silently shadow the other.
+	charge_policy=$project_root/device/charge-policy
+	[ -d "$charge_policy" ] || die "charge policy missing: $charge_policy"
+	( cd "$charge_policy" && find usr -type f ! -path '*/__pycache__/*' -print ) |
+		while IFS= read -r entry; do
+			[ ! -e "$root/$entry" ] ||
+				die "the overlay and the charge policy both ship /$entry"
+			mkdir -p "$root/$(dirname "$entry")"
+			if [ -x "$charge_policy/$entry" ]; then
+				install -m 0755 "$charge_policy/$entry" "$root/$entry"
+			else
+				install -m 0644 "$charge_policy/$entry" "$root/$entry"
+			fi
+		done
+	for required in usr/libexec/tablet-charge-idle usr/libexec/tablet-charge-display \
+		usr/libexec/tablet-charge-sample; do
+		[ -x "$root/$required" ] || die "the charge policy is incomplete: /$required"
+	done
+
+	# The release notifier is the third shared project tree.  It is installed
+	# but not enabled on Fedora (see the assemble stage): its version check
+	# shells out to dpkg, which this distribution does not carry.
+	notifier=$project_root/device/release-notifier
+	[ -d "$notifier" ] || die "release notifier missing: $notifier"
+	( cd "$notifier" && find usr -type f -print ) |
+		while IFS= read -r entry; do
+			mkdir -p "$root/$(dirname "$entry")"
+			install -m "$(stat -c '%a' "$notifier/$entry")" "$notifier/$entry" "$root/$entry"
+		done
+	install -d -m 0755 "$root/usr/share/mainline-release"
+	printf '%s\n' "$release_version" >"$root/usr/share/mainline-release/version"
+	chmod 0644 "$root/usr/share/mainline-release/version"
+
+	# Fedora has no session-mode JSON, so the indicator is enabled through the
+	# schema override; the compiled catalogue must then be rebuilt with this
+	# root's own glib rather than the host's.
+	install -D -m 0644 "$project_root/device/fedora/51-liuqin-charge-indicator.gschema.override" \
+		"$root/usr/share/glib-2.0/schemas/51-liuqin-charge-indicator.gschema.override"
+	chroot "$root" glib-compile-schemas --strict /usr/share/glib-2.0/schemas ||
+		die 'could not compile the Fedora schema catalogues'
+	chmod 0644 "$root/usr/share/glib-2.0/schemas/gschemas.compiled"
+
+	# The physical-platform verifier is a shell helper the initramfs installs
+	# too; the installed copy is what the sysinit unit runs after the switch.
+	install -D -m 0755 "$project_root/device/platform/liuqin-physical-platform" \
+		"$root/usr/local/libexec/liuqin-physical-platform"
 
 	# The two-step splash plugin reads more than the watermark out of its
 	# ImageDir: the throbber frames are the boot animation and the dialog
@@ -465,29 +520,25 @@ stage_device() {
 }
 
 # The fingerprint layer.  It is a device-layer payload like the ones above, and
-# it is a separate stage because it has to run after them: the module inside the
-# bundle is vermagic-pinned to one kernel release, and the release it is checked
-# against is the record `device` writes.  Running it before that record exists
-# would make the check skippable by ordering rather than by intent.
+# it stays a separate stage so the payload can be inspected and re-run without
+# rebuilding the whole device layer.  Since v0.8 the module is no longer carried
+# by the bundle: stable_module.py modprobes the fpc1264_spi_diag module of the
+# running kernel, so the layer no longer has to be checked against the kernel
+# release the root records.
 stage_fingerprint() {
 	[ -x "$root/usr/lib/systemd/systemd" ] || die "run the copy stage first: $root"
-	[ -f "$root/usr/share/liuqin/kernel.release" ] ||
-		die 'run the device stage first: the root records no kernel release to check against'
 	[ -f "$fingerprint_bundle" ] || die "fingerprint bundle missing: $fingerprint_bundle"
 	[ -f "$libfprint_tod_tar" ] || die "libfprint TOD archive missing: $libfprint_tod_tar"
 	say 'staging the fingerprint layer'
 
 	# The helper is the deb builder's own verification and staging code called
 	# without the dpkg wrapper, so the two distributions get the same checks
-	# rather than two implementations that agree today.  The kernel record is
-	# handed over so an image built from the wrong kernel commit is refused here,
-	# by name, instead of installing cleanly and failing at the first login.
+	# rather than two implementations that agree today.
 	PYTHONDONTWRITEBYTECODE=1 python3 "$project_root/tools/lib/stage-fingerprint-root.py" \
 		--bundle "$fingerprint_bundle" \
 		--tod-tar "$libfprint_tod_tar" \
 		--root "$root" \
-		--version "$fingerprint_version" \
-		--kernel-release-file "$root/usr/share/liuqin/kernel.release" ||
+		--version "$fingerprint_version" ||
 		die 'could not stage the fingerprint layer'
 
 	# Same reason as the device stage, one directory down: the payload is copied
@@ -526,17 +577,38 @@ stage_assemble() {
 		ln -sfn "../$2" "$root/etc/systemd/system/$1/$2"
 	}
 	link_unit basic.target.requires liuqin-gnome-storage-guard.service
-	link_unit multi-user.target.wants liuqin-gnome-usb-rescue.service
 	# liuqin-slpi.service arrives inside the sensor stack archive rather than the
 	# gnome overlay, so the link is what makes the SLPI boot path part of the
 	# installed topology instead of something only a udev rule can reach.
 	link_unit multi-user.target.wants liuqin-slpi.service
 	link_unit multi-user.target.wants liuqin-power-keyd.service
 	link_unit graphical.target.wants liuqin-backlight-default.service
+	# The battery-backed charge authentication must run at boot, as it does on
+	# the Ubuntu package: the charge policy's own units only start observing
+	# once this has negotiated the adapter role.
+	link_unit multi-user.target.wants liuqin-mipps-battery-auth.service
 	# sysinit, not the graphical targets: the probe only has to beat
 	# plymouth-start, and it must not run after the greeter has already
 	# taken DRM master.
 	link_unit sysinit.target.wants liuqin-drm-probe.service
+	# The chassis verifier runs before sysinit completes, so PID1 never caches
+	# a virtualized identity from the live device tree.
+	link_unit sysinit.target.wants liuqin-physical-platform.service
+	# The shared charge policy: sample on a timer and record transitions.
+	link_unit timers.target.wants tablet-charge-sample.timer
+	link_unit multi-user.target.wants tablet-charge-events.service
+	# The release notifier stays disabled on Fedora: it validates and compares
+	# versions by invoking dpkg, which a Fedora root does not carry, so its
+	# timer would fail on every run.  The tree and the version file are still
+	# staged -- the latter is the release identity -- but the timer is not
+	# linked, and a rerun of this stage removes a link an earlier revision made.
+	mkdir -p "$root/etc/systemd/user/timers.target.wants"
+	rm -f "$root/etc/systemd/user/timers.target.wants/mainline-release-notifier.timer"
+
+	# v0.6 enabled a USB rescue unit that v0.8 replaced with physical-platform
+	# and developer mode; a rebuild that reruns this stage must not keep it.
+	rm -f "$root/etc/systemd/system/multi-user.target.wants/liuqin-gnome-usb-rescue.service" \
+		"$root/etc/systemd/system/liuqin-gnome-usb-rescue.service"
 
 	# Obsolete activation paths: the Bluetooth helper is a dependency of the
 	# preconfigure unit now, and a leftover link would start it too early.
@@ -588,19 +660,38 @@ stage_preflight() {
 	check_mode 755 \
 		/usr/lib/systemd/systemd /usr/bin/gnome-shell \
 		/usr/bin/hexagonrpcd \
-		/usr/local/bin/busybox /usr/local/bin/liuqin-shell \
+		/usr/local/bin/busybox /usr/sbin/liuqin-devmode \
 		/usr/libexec/iio-sensor-proxy \
+		/usr/libexec/liuqin/devmode-gadget \
 		/usr/local/sbin/liuqin-gnome-storage-guard \
-		/usr/local/sbin/liuqin-gnome-usb-rescue \
+		/usr/local/libexec/liuqin-physical-platform \
 		/usr/local/libexec/liuqin-power-keyd \
 		/usr/local/libexec/liuqin-power-key-action \
 		/usr/local/sbin/liuqin-bt-public-addr \
 		/usr/local/sbin/liuqin-wlan-mac \
-		/usr/libexec/liuqin-ssc-sample-gate
+		/usr/libexec/liuqin-ssc-sample-gate \
+		/usr/libexec/tablet-charge-idle \
+		/usr/libexec/tablet-charge-display \
+		/usr/libexec/tablet-charge-sample \
+		/usr/libexec/mainline-release-notifier
 	check_mode 644 \
 		/etc/dconf/db/local.d/locks/00-liuqin-power \
 		/etc/systemd/system/liuqin-gnome-storage-guard.service \
-		/etc/systemd/system/liuqin-gnome-usb-rescue.service \
+		/etc/systemd/system/liuqin-physical-platform.service \
+		/etc/liuqin-network \
+		/usr/lib/systemd/system/liuqin-devmode.service \
+		/usr/lib/systemd/system/liuqin-devmode-ssh.socket \
+		/usr/lib/systemd/system/liuqin-devmode-ssh@.service \
+		/usr/lib/systemd/network/50-liuqin-devmode.network \
+		/usr/lib/liuqin/devmode/sshd_config \
+		/etc/udev/rules.d/71-liuqin-devmode.rules \
+		/usr/lib/systemd/system/tablet-charge-sample.service \
+		/usr/lib/systemd/system/tablet-charge-sample.timer \
+		/usr/lib/systemd/system/tablet-charge-events.service \
+		/usr/lib/systemd/system-sleep/tablet-charge-sample \
+		/usr/lib/systemd/user/tablet-charge-idle.service \
+		/usr/share/glib-2.0/schemas/51-liuqin-charge-indicator.gschema.override \
+		/usr/share/mainline-release/version \
 		/etc/systemd/system/liuqin-power-keyd.service \
 		/etc/systemd/system/liuqin-backlight-default.service \
 		/etc/systemd/system/bluetooth.service.d/20-liuqin-public-address.conf \
@@ -662,10 +753,13 @@ stage_preflight() {
 
 	for link in \
 		"basic.target.requires/liuqin-gnome-storage-guard.service ../liuqin-gnome-storage-guard.service" \
-		"multi-user.target.wants/liuqin-gnome-usb-rescue.service ../liuqin-gnome-usb-rescue.service" \
 		"multi-user.target.wants/liuqin-power-keyd.service ../liuqin-power-keyd.service" \
+		"multi-user.target.wants/liuqin-mipps-battery-auth.service ../liuqin-mipps-battery-auth.service" \
+		"multi-user.target.wants/tablet-charge-events.service ../tablet-charge-events.service" \
 		"graphical.target.wants/liuqin-backlight-default.service ../liuqin-backlight-default.service" \
-		"sysinit.target.wants/liuqin-drm-probe.service ../liuqin-drm-probe.service"; do
+		"sysinit.target.wants/liuqin-drm-probe.service ../liuqin-drm-probe.service" \
+		"sysinit.target.wants/liuqin-physical-platform.service ../liuqin-physical-platform.service" \
+		"timers.target.wants/tablet-charge-sample.timer ../tablet-charge-sample.timer"; do
 		set -- $link
 		actual=$(readlink "$root/etc/systemd/system/$1" 2>/dev/null || true)
 		[ "$actual" = "$2" ] || {
@@ -673,6 +767,26 @@ stage_preflight() {
 			failed=1
 		}
 	done
+	# Enabled would mean a broken timer: the notifier's version check shells out
+	# to dpkg, which this root does not have.
+	[ ! -e "$root/etc/systemd/user/timers.target.wants/mainline-release-notifier.timer" ] || {
+		printf '  the release notifier is enabled but needs dpkg, which Fedora does not ship\n' >&2
+		failed=1
+	}
+	grep -qx 'CHASSIS=tablet' "$root/etc/machine-info" 2>/dev/null || {
+		printf '  machine-info does not declare the tablet chassis\n' >&2
+		failed=1
+	}
+	[ ! -e "$root/etc/systemd/system/multi-user.target.wants/sshd.service" ] &&
+		[ ! -e "$root/etc/systemd/system/sockets.target.wants/sshd.socket" ] || {
+		printf '  the distribution sshd is enabled and would take port 22 from developer mode\n' >&2
+		failed=1
+	}
+	[ "$(grep -c 'charge-indicator@tablet-linux' \
+		"$root/usr/share/glib-2.0/schemas/51-liuqin-charge-indicator.gschema.override" 2>/dev/null || true)" = 1 ] || {
+		printf '  the Fedora shell override does not enable the charge indicator\n' >&2
+		failed=1
+	}
 
 	# Without the watermark the splash still loads, but the boot screen is a
 	# blank rectangle; without the throbber the two-step plugin has no

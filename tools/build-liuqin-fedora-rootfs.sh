@@ -33,9 +33,11 @@ manifest=$root.manifest
 identity=$out_dir/fedora-rootfs.identity
 
 # Pin the release rather than following the host, so a host upgrade cannot
-# silently change what this tree is.  Default to the host's release only because
-# the same dnf then resolves the same repository metadata it already trusts.
-fedora_release=${FEDORA_RELEASE:-$(rpm -E %fedora)}
+# silently change what this tree is.  44 is the release this port was built and
+# device-tested on (GNOME 50, which is what the two shell extensions declare);
+# a later release is a deliberate FEDORA_RELEASE override plus an extension
+# review, not something a host upgrade should hand you.
+fedora_release=${FEDORA_RELEASE:-44}
 arch=${FEDORA_ARCH:-aarch64}
 # The distribution pieces the device layer and the admission gate depend on
 # (GNOME session, NetworkManager, BlueZ, PipeWire, the sensor proxy), kept as an
@@ -47,6 +49,7 @@ desktop_packages=${FEDORA_DESKTOP_PACKAGES:-"\
 NetworkManager NetworkManager-wifi bluez busybox chrony dbus-daemon dconf fprintd fprintd-pam \
 gdm gnome-control-center gnome-initial-setup gnome-session gnome-settings-daemon gnome-shell iio-sensor-proxy \
 pipewire pipewire-pulseaudio wireplumber polkit util-linux shadow-utils \
+openssh-server python3-gobject python3-pyudev systemd-networkd \
 systemd-udev systemd-pam rpm dnf5 glib2 mesa-dri-drivers libdrm libinput xorg-x11-server-Xwayland \
 libcamera libcamera-ipa libcamera-tools libcamera-gstreamer snapshot v4l-utils \
 gstreamer1-plugin-libav gstreamer1-plugins-bad-free gstreamer1-plugins-ugly-free"}
@@ -178,6 +181,34 @@ stage_configure() {
 	printf 'liuqin\n' >"$root/etc/hostname"
 	chmod 0644 "$root/etc/hostname"
 
+	# The physical-platform gate and hostnamectl read the chassis from here;
+	# stage 1 applies the Gunyah policy only when the system calls itself a
+	# tablet, and a root without this file would boot with chassis=unknown and
+	# fail the verifier.  Add the key rather than replacing the file, so a
+	# distribution default (if one ever appears) survives.
+	if [ -f "$root/etc/machine-info" ]; then
+		sed -i '/^CHASSIS=/d' "$root/etc/machine-info"
+	else
+		: >"$root/etc/machine-info"
+	fi
+	printf 'CHASSIS=tablet\n' >>"$root/etc/machine-info"
+	chmod 0644 "$root/etc/machine-info"
+
+	# Developer mode binds an sshd socket of its own on the USB address, so the
+	# distribution sshd must not be listening (or enabled) in a fresh image.
+	# The project's unit owns port 22 whenever the administrator turns it on;
+	# nothing here creates host keys -- liuqin-devmode check does that per
+	# tablet, and cloned keys would be worse than none.
+	if [ -e "$root/usr/lib/systemd/system/sshd.service" ] ||
+		[ -e "$root/usr/lib/systemd/system/sshd.socket" ]; then
+		systemctl --root="$root" disable sshd.service sshd.socket >/dev/null 2>&1 || :
+	else
+		die 'openssh-server did not install sshd.service/sshd.socket'
+	fi
+	rm -f "$root/etc/systemd/system/multi-user.target.wants/sshd.service" \
+		"$root/etc/systemd/system/sockets.target.wants/sshd.socket"
+	rm -f "$root/etc/ssh/ssh_host_"*
+
 	# Stage 1 execs /usr/lib/systemd/systemd directly, and the project's own
 	# topology gate wants exactly this symlink at exactly this path.
 	ln -sfn ../lib/systemd/systemd "$root/usr/sbin/init"
@@ -274,10 +305,12 @@ stage_preflight() {
 		/usr/bin/gnome-shell \
 		/usr/bin/hexagonrpcd \
 		/usr/local/bin/busybox \
-		/usr/local/bin/liuqin-shell \
+		/usr/sbin/liuqin-devmode \
 		/usr/libexec/iio-sensor-proxy \
 		/usr/local/sbin/liuqin-gnome-storage-guard \
-		/usr/local/sbin/liuqin-gnome-usb-rescue \
+		/usr/local/libexec/liuqin-physical-platform \
+		/usr/libexec/tablet-charge-idle \
+		/usr/libexec/mainline-release-notifier \
 		/usr/local/libexec/liuqin-power-keyd \
 		/usr/local/libexec/liuqin-power-key-action \
 		/usr/local/sbin/liuqin-bt-public-addr \
@@ -332,6 +365,25 @@ stage_preflight() {
 	for path in /usr/bin/dbus-daemon /usr/lib64/security/pam_systemd.so; do
 		[ -e "$root$path" ] || die "missing from the Fedora tree (weak dependency): $path"
 	done
+	# The device layer's developer mode and charge policy are Python and
+	# networkd consumers; their absence is silent until the first USB login or
+	# the first unplugged hour.
+	for path in /usr/sbin/sshd /usr/lib/systemd/systemd-networkd; do
+		[ -e "$root$path" ] || die "missing from the Fedora tree: $path"
+	done
+	# pyudev is noarch and lands under /usr/lib; gi is archful and lands under
+	# /usr/lib64, so the two checks cannot share one base directory.
+{ ls "$root"/usr/lib/python3*/site-packages/pyudev/__init__.py >/dev/null 2>&1 ||
+	ls "$root"/usr/lib64/python3*/site-packages/pyudev/__init__.py >/dev/null 2>&1; } ||
+	die 'missing from the Fedora tree: python3-pyudev'
+	ls "$root"/usr/lib64/python3*/site-packages/gi/__init__.py >/dev/null 2>&1 ||
+		die 'missing from the Fedora tree: python3-gobject'
+	grep -qx 'CHASSIS=tablet' "$root/etc/machine-info" || die 'machine-info does not declare the tablet chassis'
+	[ ! -e "$root/etc/systemd/system/multi-user.target.wants/sshd.service" ] &&
+		[ ! -e "$root/etc/systemd/system/sockets.target.wants/sshd.socket" ] ||
+		die 'the distribution sshd is enabled; developer mode needs port 22 free'
+	[ -z "$(find "$root/etc/ssh" -name 'ssh_host_*_key' -print -quit 2>/dev/null)" ] ||
+		die 'host keys are baked into the generic tree'
 	[ "$(stat -c '%a' "$root/etc/machine-id")" = 444 ] || die 'machine-id is not the 0444 placeholder'
 	chroot "$root" /usr/lib/systemd/systemd --version >/dev/null ||
 		die 'the tree cannot execute its own systemd'

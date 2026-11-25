@@ -69,6 +69,10 @@ INPUTS_FEDORA = {
     'AUDIO_TOPOLOGY', 'WLAN_HSP2_TUPLE', 'STOCK_OVERLAY_DIR', 'STOCK_BASE_DIR',
     'SENSOR_STACK_TAR', 'SENSOR_STACK_SHA256', 'POWER_SETTINGS_BINARY',
     'MKBOOTIMG_DIR', 'INSTALLER_IMG', 'FINGERPRINT_BUNDLE', 'LIBFPRINT_TOD_TAR',
+    # The boot stage's fsck runtime is a distribution-neutral tool closure; the
+    # Fedora path does not otherwise carry an Ubuntu desktop root, so the
+    # caller names the verified ARM64 root the fsck binary is taken from.
+    'ROOT_FSCK_ROOT',
 }
 
 # Fedora needs one input Ubuntu does not: the libfprint TOD ABI library.  Fedora

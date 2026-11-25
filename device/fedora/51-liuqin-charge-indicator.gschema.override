@@ -1,0 +1,7 @@
+# SPDX-License-Identifier: MIT
+# Fedora has no session-mode JSON to append the shared charge indicator to the
+# way Ubuntu's ubuntu.json does, so the shell extension list is stated here.
+# The list is the complete value, not an addition: it repeats the OSK guard the
+# overlay's own override enables and adds the charge indicator beside it.
+[org.gnome.shell]
+enabled-extensions=['liuqin-osk-guard@io.github.liuqin','charge-indicator@tablet-linux']
